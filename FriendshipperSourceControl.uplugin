@@ -1,0 +1,22 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Friendshipper",
+	"Description": "Git source control management",
+	"Category": "Source Control",
+	"CreatedBy": "Believer",
+	"CreatedByURL": "https://projectborealis.com",
+	"DocsURL": "https://github.com/BelieverCo/GamePrototypeMP/ThirdPersonMP/Plugins/Friendshipper/README.md",
+	"EnabledByDefault": true,
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "FriendshipperSourceControl",
+			"Type": "UncookedOnly",
+			"LoadingPhase": "Default"
+		}
+	]
+}
