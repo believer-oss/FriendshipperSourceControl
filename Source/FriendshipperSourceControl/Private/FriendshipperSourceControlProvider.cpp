@@ -28,8 +28,8 @@
 #include "Misc/MessageDialog.h"
 #include "HttpManager.h"
 #include "HttpModule.h"
+#include "HttpServerModule.h"
 #include "FileHelpers.h"
-
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
 
@@ -38,10 +38,10 @@ static FName ProviderName("Friendshipper");
 void FFriendshipperSourceControlProvider::Init(bool bForceConnection)
 {
 	// Init() is called multiple times at startup: do not check git each time
-	if(!bGitAvailable)
+	if (!bGitAvailable)
 	{
 		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("FriendshipperSourceControl"));
-		if(Plugin.IsValid())
+		if (Plugin.IsValid())
 		{
 			UE_LOG(LogSourceControl, Log, TEXT("Git plugin '%s'"), *(Plugin->GetDescriptor().VersionName));
 		}
@@ -62,17 +62,17 @@ void FFriendshipperSourceControlProvider::CheckGitAvailability()
 {
 	FFriendshipperSourceControlModule& GitSourceControl = FFriendshipperSourceControlModule::Get();
 	PathToGitBinary = GitSourceControl.AccessSettings().GetBinaryPath();
-	if(PathToGitBinary.IsEmpty())
+	if (PathToGitBinary.IsEmpty())
 	{
 		// Try to find Git binary, and update settings accordingly
 		PathToGitBinary = FriendshipperSourceControlUtils::FindGitBinaryPath();
-		if(!PathToGitBinary.IsEmpty())
+		if (!PathToGitBinary.IsEmpty())
 		{
 			GitSourceControl.AccessSettings().SetBinaryPath(PathToGitBinary);
 		}
 	}
 
-	if(!PathToGitBinary.IsEmpty())
+	if (!PathToGitBinary.IsEmpty())
 	{
 		UE_LOG(LogSourceControl, Log, TEXT("Using '%s'"), *PathToGitBinary);
 		bGitAvailable = true;
@@ -144,18 +144,18 @@ void FFriendshipperSourceControlProvider::CheckRepositoryStatus()
 			}
 			FriendshipperSourceControlUtils::GetRemoteBranchName(PathToGitBinary, PathToRepositoryRoot, RemoteBranchName);
 			FriendshipperSourceControlUtils::GetRemoteUrl(PathToGitBinary, PathToRepositoryRoot, RemoteUrl);
-			const TArray<FString> Files{TEXT("*.uasset"), TEXT("*.umap")};
+			const TArray<FString> Files{ TEXT("*.uasset"), TEXT("*.umap") };
 			TArray<FString> LockableErrorMessages;
 			if (!FriendshipperSourceControlUtils::CheckLFSLockable(PathToGitBinary, PathToRepositoryRoot, Files, LockableErrorMessages))
 			{
-				for (const auto &ErrorMessage : LockableErrorMessages)
+				for (const auto& ErrorMessage : LockableErrorMessages)
 				{
 					UE_LOG(LogSourceControl, Error, TEXT("%s"), *ErrorMessage);
 				}
 			}
-			const TArray<FString> ProjectDirs{FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
-											  FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
-											  FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())};
+			const TArray<FString> ProjectDirs{ FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
+				FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
+				FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()) };
 			TArray<FString> StatusErrorMessages;
 			if (!FriendshipperSourceControlUtils::RunUpdateStatus(PathToGitBinary, PathToRepositoryRoot, ProjectDirs, EFetchRemote::True, States))
 			{
@@ -243,7 +243,7 @@ TSharedRef<FFriendshipperSourceControlState, ESPMode::ThreadSafe> FFriendshipper
 	else
 	{
 		// cache an unknown state for this item
-		TSharedRef<FFriendshipperSourceControlState, ESPMode::ThreadSafe> NewState = MakeShareable( new FFriendshipperSourceControlState(Filename) );
+		TSharedRef<FFriendshipperSourceControlState, ESPMode::ThreadSafe> NewState = MakeShareable(new FFriendshipperSourceControlState(Filename));
 		StateCache.Add(Filename, NewState);
 		return NewState;
 	}
@@ -253,13 +253,13 @@ FText FFriendshipperSourceControlProvider::GetStatusText() const
 {
 	FFormatNamedArguments Args;
 	Args.Add(TEXT("IsAvailable"), (IsEnabled() && IsAvailable()) ? LOCTEXT("Yes", "Yes") : LOCTEXT("No", "No"));
-	Args.Add( TEXT("RepositoryName"), FText::FromString(PathToRepositoryRoot) );
-	Args.Add( TEXT("RemoteUrl"), FText::FromString(RemoteUrl) );
-	Args.Add( TEXT("UserName"), FText::FromString(UserName) );
-	Args.Add( TEXT("UserEmail"), FText::FromString(UserEmail) );
-	Args.Add( TEXT("BranchName"), FText::FromString(BranchName) );
-	Args.Add( TEXT("CommitId"), FText::FromString(CommitId.Left(8)) );
-	Args.Add( TEXT("CommitSummary"), FText::FromString(CommitSummary) );
+	Args.Add(TEXT("RepositoryName"), FText::FromString(PathToRepositoryRoot));
+	Args.Add(TEXT("RemoteUrl"), FText::FromString(RemoteUrl));
+	Args.Add(TEXT("UserName"), FText::FromString(UserName));
+	Args.Add(TEXT("UserEmail"), FText::FromString(UserEmail));
+	Args.Add(TEXT("BranchName"), FText::FromString(BranchName));
+	Args.Add(TEXT("CommitId"), FText::FromString(CommitId.Left(8)));
+	Args.Add(TEXT("CommitSummary"), FText::FromString(CommitSummary));
 
 	FText FormattedError;
 	const TArray<FText>& RecentErrors = GetLastErrors();
@@ -273,7 +273,7 @@ FText FFriendshipperSourceControlProvider::GetStatusText() const
 
 	Args.Add(TEXT("ErrorText"), FormattedError);
 
-	return FText::Format( NSLOCTEXT("GitStatusText", "{ErrorText}Enabled: {IsAvailable}", "Local repository: {RepositoryName}\nRemote: {RemoteUrl}\nUser: {UserName}\nE-mail: {UserEmail}\n[{BranchName} {CommitId}] {CommitSummary}"), Args );
+	return FText::Format(NSLOCTEXT("GitStatusText", "{ErrorText}Enabled: {IsAvailable}", "Local repository: {RepositoryName}\nRemote: {RemoteUrl}\nUser: {UserName}\nE-mail: {UserEmail}\n[{BranchName} {CommitId}] {CommitSummary}"), Args);
 }
 
 /** Quick check if revision control is enabled */
@@ -293,7 +293,7 @@ const FName& FFriendshipperSourceControlProvider::GetName(void) const
 	return ProviderName;
 }
 
-ECommandResult::Type FFriendshipperSourceControlProvider::GetState( const TArray<FString>& InFiles, TArray< TSharedRef<ISourceControlState, ESPMode::ThreadSafe> >& OutState, EStateCacheUsage::Type InStateCacheUsage )
+ECommandResult::Type FFriendshipperSourceControlProvider::GetState(const TArray<FString>& InFiles, TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>>& OutState, EStateCacheUsage::Type InStateCacheUsage)
 {
 	if (!IsEnabled())
 	{
@@ -330,7 +330,7 @@ ECommandResult::Type FFriendshipperSourceControlProvider::GetState( const TArray
 
 ECommandResult::Type FFriendshipperSourceControlProvider::GetState(const TArray<FSourceControlChangelistRef>& InChangelists, TArray<FSourceControlChangelistStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage)
 {
-    return ECommandResult::Failed;
+	return ECommandResult::Failed;
 }
 
 TArray<FSourceControlStateRef> FFriendshipperSourceControlProvider::GetCachedStateByPredicate(TFunctionRef<bool(const FSourceControlStateRef&)> Predicate) const
@@ -373,19 +373,19 @@ TArray<FString> FFriendshipperSourceControlProvider::GetFilesInCache()
 	return Files;
 }
 
-FDelegateHandle FFriendshipperSourceControlProvider::RegisterSourceControlStateChanged_Handle( const FSourceControlStateChanged::FDelegate& SourceControlStateChanged )
+FDelegateHandle FFriendshipperSourceControlProvider::RegisterSourceControlStateChanged_Handle(const FSourceControlStateChanged::FDelegate& SourceControlStateChanged)
 {
-	return OnSourceControlStateChanged.Add( SourceControlStateChanged );
+	return OnSourceControlStateChanged.Add(SourceControlStateChanged);
 }
 
-void FFriendshipperSourceControlProvider::UnregisterSourceControlStateChanged_Handle( FDelegateHandle Handle )
+void FFriendshipperSourceControlProvider::UnregisterSourceControlStateChanged_Handle(FDelegateHandle Handle)
 {
-	OnSourceControlStateChanged.Remove( Handle );
+	OnSourceControlStateChanged.Remove(Handle);
 }
 
-ECommandResult::Type FFriendshipperSourceControlProvider::Execute( const FSourceControlOperationRef& InOperation, FSourceControlChangelistPtr InChangelist, const TArray<FString>& InFiles, EConcurrency::Type InConcurrency, const FSourceControlOperationComplete& InOperationCompleteDelegate )
+ECommandResult::Type FFriendshipperSourceControlProvider::Execute(const FSourceControlOperationRef& InOperation, FSourceControlChangelistPtr InChangelist, const TArray<FString>& InFiles, EConcurrency::Type InConcurrency, const FSourceControlOperationComplete& InOperationCompleteDelegate)
 {
-	if(!IsEnabled() && !(InOperation->GetName() == "Connect")) // Only Connect operation allowed while not Enabled (Repository found)
+	if (!IsEnabled() && !(InOperation->GetName() == "Connect")) // Only Connect operation allowed while not Enabled (Repository found)
 	{
 		InOperationCompleteDelegate.ExecuteIfBound(InOperation, ECommandResult::Failed);
 		return ECommandResult::Failed;
@@ -395,12 +395,12 @@ ECommandResult::Type FFriendshipperSourceControlProvider::Execute( const FSource
 
 	// Query to see if we allow this operation
 	TSharedPtr<IFriendshipperSourceControlWorker, ESPMode::ThreadSafe> Worker = CreateWorker(InOperation->GetName());
-	if(!Worker.IsValid())
+	if (!Worker.IsValid())
 	{
 		// this operation is unsupported by this revision control provider
 		FFormatNamedArguments Arguments;
-		Arguments.Add( TEXT("OperationName"), FText::FromName(InOperation->GetName()) );
-		Arguments.Add( TEXT("ProviderName"), FText::FromName(GetName()) );
+		Arguments.Add(TEXT("OperationName"), FText::FromName(InOperation->GetName()));
+		Arguments.Add(TEXT("ProviderName"), FText::FromName(GetName()));
 		FText Message(FText::Format(LOCTEXT("UnsupportedOperation", "Operation '{OperationName}' not supported by revision control provider '{ProviderName}'"), Arguments));
 
 		FTSMessageLog("SourceControl").Error(Message);
@@ -416,7 +416,7 @@ ECommandResult::Type FFriendshipperSourceControlProvider::Execute( const FSource
 	Command->OperationCompleteDelegate = InOperationCompleteDelegate;
 
 	// fire off operation
-	if(InConcurrency == EConcurrency::Synchronous)
+	if (InConcurrency == EConcurrency::Synchronous)
 	{
 		Command->bAutoDelete = false;
 
@@ -436,7 +436,7 @@ ECommandResult::Type FFriendshipperSourceControlProvider::Execute( const FSource
 	}
 }
 
-bool FFriendshipperSourceControlProvider::CanCancelOperation( const FSourceControlOperationRef& InOperation ) const
+bool FFriendshipperSourceControlProvider::CanCancelOperation(const FSourceControlOperationRef& InOperation) const
 {
 	// TODO: maybe support cancellation again?
 #if 0
@@ -455,7 +455,7 @@ bool FFriendshipperSourceControlProvider::CanCancelOperation( const FSourceContr
 	return false;
 }
 
-void FFriendshipperSourceControlProvider::CancelOperation( const FSourceControlOperationRef& InOperation )
+void FFriendshipperSourceControlProvider::CancelOperation(const FSourceControlOperationRef& InOperation)
 {
 	for (int32 CommandIndex = 0; CommandIndex < CommandQueue.Num(); ++CommandIndex)
 	{
@@ -519,15 +519,16 @@ bool FFriendshipperSourceControlProvider::UsesSnapshots() const
 #endif
 
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
-bool FFriendshipperSourceControlProvider::CanExecuteOperation(const FSourceControlOperationRef& InOperation) const {
+bool FFriendshipperSourceControlProvider::CanExecuteOperation(const FSourceControlOperationRef& InOperation) const
+{
 	return WorkersMap.Find(InOperation->GetName()) != nullptr;
 }
 
 TMap<ISourceControlProvider::EStatus, FString> FFriendshipperSourceControlProvider::GetStatus() const
 {
 	TMap<EStatus, FString> Result;
-	Result.Add(EStatus::Enabled, IsEnabled() ? TEXT("Yes") : TEXT("No") );
-	Result.Add(EStatus::Connected, (IsEnabled() && IsAvailable()) ? TEXT("Yes") : TEXT("No") );
+	Result.Add(EStatus::Enabled, IsEnabled() ? TEXT("Yes") : TEXT("No"));
+	Result.Add(EStatus::Connected, (IsEnabled() && IsAvailable()) ? TEXT("Yes") : TEXT("No"));
 	Result.Add(EStatus::User, UserName);
 	Result.Add(EStatus::Repository, PathToRepositoryRoot);
 	Result.Add(EStatus::Remote, RemoteUrl);
@@ -540,7 +541,7 @@ TMap<ISourceControlProvider::EStatus, FString> FFriendshipperSourceControlProvid
 TSharedPtr<IFriendshipperSourceControlWorker, ESPMode::ThreadSafe> FFriendshipperSourceControlProvider::CreateWorker(const FName& InOperationName) const
 {
 	const FGetFriendshipperSourceControlWorker* Operation = WorkersMap.Find(InOperationName);
-	if(Operation != nullptr)
+	if (Operation != nullptr)
 	{
 		return Operation->Execute();
 	}
@@ -548,9 +549,9 @@ TSharedPtr<IFriendshipperSourceControlWorker, ESPMode::ThreadSafe> FFriendshippe
 	return nullptr;
 }
 
-void FFriendshipperSourceControlProvider::RegisterWorker( const FName& InName, const FGetFriendshipperSourceControlWorker& InDelegate )
+void FFriendshipperSourceControlProvider::RegisterWorker(const FName& InName, const FGetFriendshipperSourceControlWorker& InDelegate)
 {
-	WorkersMap.Add( InName, InDelegate );
+	WorkersMap.Add(InName, InDelegate);
 }
 
 void FFriendshipperSourceControlProvider::OutputCommandMessages(const FFriendshipperSourceControlCommand& InCommand) const
@@ -581,7 +582,7 @@ void FFriendshipperSourceControlProvider::UpdateRepositoryStatus(const class FFr
 void FFriendshipperSourceControlProvider::Tick()
 {
 	bool bStatesUpdated = TicksUntilNextForcedUpdate == 1;
-	if( TicksUntilNextForcedUpdate > 0 )
+	if (TicksUntilNextForcedUpdate > 0)
 	{
 		--TicksUntilNextForcedUpdate;
 	}
@@ -614,7 +615,7 @@ void FFriendshipperSourceControlProvider::Tick()
 			}
 
 			// commands that are left in the array during a tick need to be deleted
-			if(Command.bAutoDelete)
+			if (Command.bAutoDelete)
 			{
 				// Only delete commands that are not running 'synchronously'
 				delete &Command;
@@ -641,9 +642,9 @@ void FFriendshipperSourceControlProvider::Tick()
 	}
 }
 
-TArray< TSharedRef<ISourceControlLabel> > FFriendshipperSourceControlProvider::GetLabels( const FString& InMatchingSpec ) const
+TArray<TSharedRef<ISourceControlLabel>> FFriendshipperSourceControlProvider::GetLabels(const FString& InMatchingSpec) const
 {
-	TArray< TSharedRef<ISourceControlLabel> > Tags;
+	TArray<TSharedRef<ISourceControlLabel>> Tags;
 
 	// NOTE list labels. Called by CrashDebugHelper() (to remote debug Engine crash)
 	//					 and by SourceControlHelpers::AnnotateFile() (to add source file to report)
@@ -651,9 +652,9 @@ TArray< TSharedRef<ISourceControlLabel> > FFriendshipperSourceControlProvider::G
 	return Tags;
 }
 
-TArray<FSourceControlChangelistRef> FFriendshipperSourceControlProvider::GetChangelists( EStateCacheUsage::Type InStateCacheUsage )
+TArray<FSourceControlChangelistRef> FFriendshipperSourceControlProvider::GetChangelists(EStateCacheUsage::Type InStateCacheUsage)
 {
-    return TArray<FSourceControlChangelistRef>();
+	return TArray<FSourceControlChangelistRef>();
 }
 
 #if SOURCE_CONTROL_WITH_SLATE
@@ -687,11 +688,11 @@ ECommandResult::Type FFriendshipperSourceControlProvider::ExecuteSynchronousComm
 	// Display the progress dialog if a string was provided
 	{
 		// TODO: support cancellation?
-		//FScopedSourceControlProgress Progress(TaskText, FSimpleDelegate::CreateStatic(&Local::CancelCommand, &InCommand));
+		// FScopedSourceControlProgress Progress(TaskText, FSimpleDelegate::CreateStatic(&Local::CancelCommand, &InCommand));
 		FScopedSourceControlProgress Progress(TaskText);
 
 		// Issue the command asynchronously...
-		IssueCommand( InCommand );
+		IssueCommand(InCommand);
 
 		// ... then wait for its completion (thus making it synchronous)
 		double LastTime = FPlatformTime::Seconds();
@@ -701,10 +702,13 @@ ECommandResult::Type FFriendshipperSourceControlProvider::ExecuteSynchronousComm
 			Tick();
 
 			const double AppTime = FPlatformTime::Seconds();
-			FHttpModule::Get().GetHttpManager().Tick(AppTime - LastTime);
+			const double DeltaTime = AppTime - LastTime;
+			FHttpModule::Get().GetHttpManager().Tick(DeltaTime);
+			FHttpServerModule::Get().Tick(DeltaTime);
 			LastTime = AppTime;
 
-			if (i >= 20) {
+			if (i >= 20)
+			{
 				Progress.Tick();
 				i = 0;
 			}
@@ -724,7 +728,7 @@ ECommandResult::Type FFriendshipperSourceControlProvider::ExecuteSynchronousComm
 		}
 		else if (InCommand.Conflicts.Num() > 0)
 		{
-					
+
 			FText Message(LOCTEXT("Friendshipper_Conflict_Msg", "Operation was cancelled due to conflicts detected in the following files:\n\n"));
 
 			for (const FString& File : InCommand.Conflicts)
@@ -733,12 +737,12 @@ ECommandResult::Type FFriendshipperSourceControlProvider::ExecuteSynchronousComm
 			}
 
 			Message = FText::Format(LOCTEXT("Felowshipper_Conflict_Footer", "{0}\n\nConsider reverting the file(s) or discussing with your team on how best to proceed."), Message);
-			
+
 			FMessageDialog::Open(EAppMsgType::Ok, Message);
 		}
 		else if (!bSuppressResponseMsg)
 		{
-			FMessageDialog::Open( EAppMsgType::Ok, LOCTEXT("Git_ServerUnresponsive", "Git command failed. Please check your connection and try again, or check the output log for more information.") );
+			FMessageDialog::Open(EAppMsgType::Ok, LOCTEXT("Git_ServerUnresponsive", "Git command failed. Please check your connection and try again, or check the output log for more information."));
 			UE_LOG(LogSourceControl, Error, TEXT("Command '%s' Failed!"), *InCommand.Operation->GetName().ToString());
 		}
 	}
@@ -836,9 +840,9 @@ int32 FFriendshipperSourceControlProvider::GetStateBranchIndex(const FString& St
 TArray<FString> FFriendshipperSourceControlProvider::GetStatusBranchNames() const
 {
 	TArray<FString> StatusBranches;
-	if(PathToGitBinary.IsEmpty() || PathToRepositoryRoot.IsEmpty())
+	if (PathToGitBinary.IsEmpty() || PathToRepositoryRoot.IsEmpty())
 		return StatusBranches;
-	
+
 	for (int i = 0; i < StatusBranchNamePatternsInternal.Num(); i++)
 	{
 		TArray<FString> Matches;
@@ -847,11 +851,11 @@ TArray<FString> FFriendshipperSourceControlProvider::GetStatusBranchNames() cons
 		{
 			for (int j = 0; j < Matches.Num(); j++)
 			{
-				StatusBranches.Add(Matches[j].TrimStartAndEnd());	
+				StatusBranches.Add(Matches[j].TrimStartAndEnd());
 			}
 		}
 	}
-	
+
 	return StatusBranches;
 }
 

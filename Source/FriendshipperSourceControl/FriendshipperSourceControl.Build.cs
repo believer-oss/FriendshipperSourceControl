@@ -11,20 +11,24 @@ public class FriendshipperSourceControl : ModuleRules
 	{
 		PrivateDependencyModuleNames.AddRange(
 			new string[] {
-				"Core",
-				"CoreUObject",
-				"HTTP",
-				"Json",
-				"JsonUtilities",
-				"Slate",
-				"SlateCore",
-				"InputCore",
-				"DesktopWidgets",
-				"EditorStyle",
-				"UnrealEd",
-				"SourceControl",
-				"SourceControlWindows",
-				"Projects"
+                "Core",
+                "CoreUObject",
+                "DesktopWidgets",
+                "EditorStyle",
+                "Engine",
+                "HTTP",
+                "HTTPServer",
+                "InputCore",
+                "Json",
+                "JsonUtilities",
+                "Projects",
+                "Slate",
+                "SlateCore",
+                "SourceControl",
+                "SourceControlWindows",
+                "UnrealEd",
+
+                "FriendshipperCore",
 			}
 		);
 
