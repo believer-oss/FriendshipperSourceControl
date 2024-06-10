@@ -10,6 +10,7 @@
 
 #include "FriendshipperSourceControlSettings.h"
 #include "FriendshipperSourceControlProvider.h"
+#include "FriendshipperHttpRouter.h"
 
 struct FAssetData;
 class FExtender;
@@ -40,7 +41,7 @@ Written and contributed by Sebastien Rombauts (sebastien.rombauts@gmail.com)
 - Git LFS 2 File Locking is working with Git 2.10+ and Git LFS 2.0.0
 - Windows, Mac and Linux
 
-### TODO 
+### TODO
 1. configure the name of the remote instead of default "origin"
 
 ### TODO LFS 2.x File Locking
@@ -54,10 +55,10 @@ Use "TODO LFS" in the code to track things left to do/improve/refactor:
    is not working after Git LFS 2 has switched "read-only" flag on files (which needs the Checkout operation to be editable)!
    - temporarily deactivating locks may be required if we want to be able to work while not connected (do we really need this ???)
    - does Git LFS have a command to do this deactivation ?
-     - perhaps should we rely on detection of such flags to detect LFS 2 usage (ie. the need to do a checkout)
-       - see SubversionSourceControl plugin that deals with such flags
-       - this would need a rework of the way the "bIsUsingFileLocking" is propagated, since this would no more be a configuration (or not only) but a file state
-     - else we should at least revert those read-only flags when going out of "Lock mode"
+	 - perhaps should we rely on detection of such flags to detect LFS 2 usage (ie. the need to do a checkout)
+	   - see SubversionSourceControl plugin that deals with such flags
+	   - this would need a rework of the way the "bIsUsingFileLocking" is propagated, since this would no more be a configuration (or not only) but a file state
+	 - else we should at least revert those read-only flags when going out of "Lock mode"
 
 ### What *cannot* be done presently
 - Branch/Merge are not in the current Editor workflow
@@ -114,12 +115,12 @@ public:
 	 *
 	 * @return Returns singleton instance, loading the module on demand if needed
 	 */
-	static  FFriendshipperSourceControlModule& Get()
+	static FFriendshipperSourceControlModule& Get()
 	{
-		return FModuleManager::Get().LoadModuleChecked< FFriendshipperSourceControlModule >("FriendshipperSourceControl");
+		return FModuleManager::Get().LoadModuleChecked<FFriendshipperSourceControlModule>("FriendshipperSourceControl");
 	}
 
-	static  FFriendshipperSourceControlModule* GetThreadSafe()
+	static FFriendshipperSourceControlModule* GetThreadSafe()
 	{
 		IModuleInterface* ModulePtr = FModuleManager::Get().GetModule("FriendshipperSourceControl");
 		if (!ModulePtr && !IsEngineExitRequested())
@@ -160,4 +161,6 @@ private:
 	FDelegateHandle CbdHandle_OnSourcesViewChanged;
 	FDelegateHandle CbdHandle_OnAssetPathChanged;
 	FDelegateHandle CbdHandle_OnExtendAssetSelectionMenu;
+
+	FFriendshipperHttpRouter HttpRouter;
 };
