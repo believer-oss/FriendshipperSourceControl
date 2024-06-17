@@ -17,17 +17,17 @@ class FFriendshipperSourceControlCommand;
 
 DECLARE_DELEGATE_RetVal(FFriendshipperSourceControlWorkerRef, FGetFriendshipperSourceControlWorker)
 
-/// Git version and capabilites extracted from the string "git version 2.11.0.windows.3"
-struct FFriendshipperVersion
+	/// Git version and capabilites extracted from the string "git version 2.11.0.windows.3"
+	struct FFriendshipperVersion
 {
 	// Git version extracted from the string "git version 2.11.0.windows.3" (Windows), "git version 2.11.0" (Linux/Mac/Cygwin/WSL) or "git version 2.31.1.vfs.0.3" (Microsoft)
-	int Major;   // 2	Major version number
-	int Minor;   // 31	Minor version number
-	int Patch;   // 1	Patch/bugfix number
+	int Major; // 2	Major version number
+	int Minor; // 31	Minor version number
+	int Patch; // 1	Patch/bugfix number
 	bool bIsFork;
-	FString Fork; // "vfs"
+	FString Fork;  // "vfs"
 	int ForkMajor; // 0	Fork specific revision number
-	int ForkMinor; // 3 
+	int ForkMinor; // 3
 	int ForkPatch; // ?
 
 	FFriendshipperVersion()
@@ -55,15 +55,15 @@ public:
 	virtual bool QueryStateBranchConfig(const FString& ConfigSrc, const FString& ConfigDest) override;
 	virtual void RegisterStateBranches(const TArray<FString>& BranchNames, const FString& ContentRootIn) override;
 	virtual int32 GetStateBranchIndex(const FString& BranchName) const override;
-	virtual ECommandResult::Type GetState( const TArray<FString>& InFiles, TArray<FSourceControlStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage ) override;
-    virtual ECommandResult::Type GetState(const TArray<FSourceControlChangelistRef>& InChangelists, TArray<FSourceControlChangelistStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage) override;
+	virtual ECommandResult::Type GetState(const TArray<FString>& InFiles, TArray<FSourceControlStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage) override;
+	virtual ECommandResult::Type GetState(const TArray<FSourceControlChangelistRef>& InChangelists, TArray<FSourceControlChangelistStateRef>& OutState, EStateCacheUsage::Type InStateCacheUsage) override;
 	virtual TArray<FSourceControlStateRef> GetCachedStateByPredicate(TFunctionRef<bool(const FSourceControlStateRef&)> Predicate) const override;
 	virtual FDelegateHandle RegisterSourceControlStateChanged_Handle(const FSourceControlStateChanged::FDelegate& SourceControlStateChanged) override;
 	virtual void UnregisterSourceControlStateChanged_Handle(FDelegateHandle Handle) override;
 
 	virtual ECommandResult::Type Execute(const FSourceControlOperationRef& InOperation, FSourceControlChangelistPtr InChangelist, const TArray<FString>& InFiles, EConcurrency::Type InConcurrency = EConcurrency::Synchronous, const FSourceControlOperationComplete& InOperationCompleteDelegate = FSourceControlOperationComplete()) override;
-	virtual bool CanCancelOperation( const FSourceControlOperationRef& InOperation ) const override;
-	virtual void CancelOperation( const FSourceControlOperationRef& InOperation ) override;
+	virtual bool CanCancelOperation(const FSourceControlOperationRef& InOperation) const override;
+	virtual void CancelOperation(const FSourceControlOperationRef& InOperation) override;
 
 	virtual bool UsesLocalReadOnlyState() const override;
 	virtual bool UsesChangelists() const override;
@@ -77,13 +77,13 @@ public:
 	virtual bool UsesSnapshots() const override;
 #endif
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION >= 3
-	virtual bool CanExecuteOperation( const FSourceControlOperationRef& InOperation ) const override;
+	virtual bool CanExecuteOperation(const FSourceControlOperationRef& InOperation) const override;
 	virtual TMap<EStatus, FString> GetStatus() const override;
 #endif
 	virtual void Tick() override;
-	virtual TArray< TSharedRef<class ISourceControlLabel> > GetLabels( const FString& InMatchingSpec ) const override;
+	virtual TArray<TSharedRef<class ISourceControlLabel>> GetLabels(const FString& InMatchingSpec) const override;
 
-	virtual TArray<FSourceControlChangelistRef> GetChangelists( EStateCacheUsage::Type InStateCacheUsage ) override;
+	virtual TArray<FSourceControlChangelistRef> GetChangelists(EStateCacheUsage::Type InStateCacheUsage) override;
 
 #if SOURCE_CONTROL_WITH_SLATE
 	virtual TSharedRef<class SWidget> MakeSettingsWidget() const override;
@@ -169,7 +169,7 @@ public:
 	 * Register a worker with the provider.
 	 * This is used internally so the provider can maintain a map of all available operations.
 	 */
-	void RegisterWorker( const FName& InName, const FGetFriendshipperSourceControlWorker& InDelegate );
+	void RegisterWorker(const FName& InName, const FGetFriendshipperSourceControlWorker& InDelegate);
 
 	/** Set list of error messages that occurred after last perforce command */
 	void SetLastErrors(const TArray<FText>& InErrors);
@@ -198,7 +198,7 @@ public:
 	const FString& GetRemoteBranchName() const { return RemoteBranchName; }
 
 	TArray<FString> GetStatusBranchNames() const;
-	
+
 	/** Indicates editor binaries are to be updated upon next sync */
 	bool bPendingRestart;
 
@@ -228,7 +228,7 @@ private:
 	/** Helper function for running command synchronously. */
 	ECommandResult::Type ExecuteSynchronousCommand(class FFriendshipperSourceControlCommand& InCommand, const FText& Task, bool bSuppressResponseMsg);
 	/** Issue a command asynchronously if possible. */
-	ECommandResult::Type IssueCommand(class FFriendshipperSourceControlCommand& InCommand, const bool bSynchronous = false );
+	ECommandResult::Type IssueCommand(class FFriendshipperSourceControlCommand& InCommand);
 
 	/** Output any messages this command holds */
 	void OutputCommandMessages(const class FFriendshipperSourceControlCommand& InCommand) const;
@@ -264,13 +264,13 @@ private:
 	FString CommitSummary;
 
 	/** State cache */
-	TMap<FString, TSharedRef<class FFriendshipperSourceControlState, ESPMode::ThreadSafe> > StateCache;
+	TMap<FString, TSharedRef<class FFriendshipperSourceControlState, ESPMode::ThreadSafe>> StateCache;
 
 	/** The currently registered revision control operations */
 	TMap<FName, FGetFriendshipperSourceControlWorker> WorkersMap;
 
 	/** Queue for commands given by the main thread */
-	TArray < FFriendshipperSourceControlCommand* > CommandQueue;
+	TArray<FFriendshipperSourceControlCommand*> CommandQueue;
 
 	/** For notifying when the revision control states in the cache have changed */
 	FSourceControlStateChanged OnSourceControlStateChanged;
@@ -291,6 +291,6 @@ private:
 
 	/** Array of branch name patterns for status queries */
 	TArray<FString> StatusBranchNamePatternsInternal;
-		
+
 	class FFriendshipperSourceControlRunner* Runner = nullptr;
 };
