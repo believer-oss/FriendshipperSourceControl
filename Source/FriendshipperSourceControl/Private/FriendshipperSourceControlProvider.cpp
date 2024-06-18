@@ -756,13 +756,13 @@ ECommandResult::Type FFriendshipperSourceControlProvider::ExecuteSynchronousComm
 	return Result;
 }
 
-ECommandResult::Type FFriendshipperSourceControlProvider::IssueCommand(FFriendshipperSourceControlCommand& InCommand, const bool bSynchronous)
+ECommandResult::Type FFriendshipperSourceControlProvider::IssueCommand(FFriendshipperSourceControlCommand& InCommand)
 {
-	if (!bSynchronous && GThreadPool != nullptr)
+	if (GBackgroundPriorityThreadPool != nullptr)
 	{
 		// Queue this to our worker thread(s) for resolving.
 		// When asynchronous, any callback gets called from Tick().
-		GThreadPool->AddQueuedWork(&InCommand);
+		GBackgroundPriorityThreadPool->AddQueuedWork(&InCommand);
 		CommandQueue.Add(&InCommand);
 		return ECommandResult::Succeeded;
 	}

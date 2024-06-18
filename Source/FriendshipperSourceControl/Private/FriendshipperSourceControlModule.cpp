@@ -63,7 +63,8 @@ void FFriendshipperSourceControlModule::StartupModule()
 	// Make sure we've initialized the provider
 	FriendshipperSourceControlProvider.Init();
 
-	UE::Tasks::FTask Task = UE::Tasks::Launch(UE_SOURCE_LOCATION, [this]
+	UE::Tasks::FTask Task = UE::Tasks::Launch(
+		UE_SOURCE_LOCATION, [this]
 		{
 			FUserInfo UserInfo;
 			if (FriendshipperSourceControlProvider.GetFriendshipperClient().GetUserInfo(UserInfo))
@@ -74,7 +75,8 @@ void FFriendshipperSourceControlModule::StartupModule()
 						FriendshipperSourceControlProvider.UpdateSettings();
 					});
 			}
-		});
+		},
+		UE::Tasks::ETaskPriority::BackgroundNormal);
 
 	// Bind our revision control provider to the editor
 	IModularFeatures::Get().RegisterModularFeature("SourceControl", &FriendshipperSourceControlProvider);
