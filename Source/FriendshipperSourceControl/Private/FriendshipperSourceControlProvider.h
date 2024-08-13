@@ -12,8 +12,8 @@
 #include "Runtime/Launch/Resources/Version.h"
 
 class FFriendshipperSourceControlState;
-
 class FFriendshipperSourceControlCommand;
+struct FFriendshipperState;
 
 DECLARE_DELEGATE_RetVal(FFriendshipperSourceControlWorkerRef, FGetFriendshipperSourceControlWorker)
 
@@ -40,6 +40,12 @@ DECLARE_DELEGATE_RetVal(FFriendshipperSourceControlWorkerRef, FGetFriendshipperS
 		, ForkPatch(0)
 	{
 	}
+};
+
+struct FFriendshipperFileWatchHandle
+{
+	FString Directory;
+	FDelegateHandle DelegateHandle;
 };
 
 class FFriendshipperSourceControlProvider : public ISourceControlProvider
@@ -199,8 +205,13 @@ public:
 
 	TArray<FString> GetStatusBranchNames() const;
 
-	/** Indicates editor binaries are to be updated upon next sync */
-	bool bPendingRestart;
+	// Source control state cache refresh
+	TSet<FString> GetAllPathsAbsolute();
+	bool UpdateCachedStates(const TMap<const FString, FFriendshipperState>& InResults);
+	void RefreshCacheFromSavedState();
+	void RunFileRescanTask();
+	void OnFilesChanged(const TArray<struct FFileChangeData>& FileChanges);
+	void OnRecievedHttpStatusUpdate(const FRepoStatus& RepoStatus);
 
 	uint32 TicksUntilNextForcedUpdate = 0;
 
@@ -266,6 +277,16 @@ private:
 	/** State cache */
 	TMap<FString, TSharedRef<class FFriendshipperSourceControlState, ESPMode::ThreadSafe>> StateCache;
 
+	/** All source controlled files in the repo under Content/ and Config/ */
+	FRWLock AllPathsAbsoluteLock;
+	TSet<FString> AllPathsAbsolute;
+
+	/** Flag to skip triggering another scan if one is in progress */
+	std::atomic<bool> bAllPathsScanInProgress;
+
+	/** Delegates to unregister on shutdown */
+	TArray<FFriendshipperFileWatchHandle> FileWatchHandles;
+
 	/** The currently registered revision control operations */
 	TMap<FName, FGetFriendshipperSourceControlWorker> WorkersMap;
 
@@ -291,6 +312,4 @@ private:
 
 	/** Array of branch name patterns for status queries */
 	TArray<FString> StatusBranchNamePatternsInternal;
-
-	class FFriendshipperSourceControlRunner* Runner = nullptr;
 };

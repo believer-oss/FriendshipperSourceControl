@@ -72,13 +72,8 @@ static bool LockFiles(const FString& PathToGitRoot, const TArray<FString>& Files
 
 	if (bSuccess)
 	{
-		const FString& LockUser = FFriendshipperSourceControlModule::Get().GetProvider().GetLockUser();
-		for (const FString& AbsoluteFile : SucceededFiles)
-		{
-			 FFriendshipperLockedFilesCache::AddLockedFile(AbsoluteFile, LockUser);
-		}
-
 		FriendshipperSourceControlUtils::CollectNewStates(SucceededFiles, States, EFileState::Unset, ETreeState::Unset, ELockState::Locked);
+		const FString& LockUser = FFriendshipperSourceControlModule::Get().GetProvider().GetLockUser();
 		for (auto&& State : States)
 		{
 			State.Value.LockUser = LockUser;
@@ -211,7 +206,7 @@ bool FFriendshipperCheckInWorker::Execute(FFriendshipperSourceControlCommand& In
 
 	// now update the status of our files
 	TMap<FString, FFriendshipperSourceControlState> UpdatedStates;
-	bool bSuccess = FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.Files, EFetchRemote::False, UpdatedStates);
+	bool bSuccess = FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToRepositoryRoot, InCommand.Files, EForceStatusRefresh::False, UpdatedStates);
 	if (bSuccess)
 	{
 		FriendshipperSourceControlUtils::CollectNewStates(UpdatedStates, States);
@@ -270,24 +265,20 @@ bool FFriendshipperDeleteWorker::Execute(FFriendshipperSourceControlCommand& InC
 
 	// We just delete the file directly here because if we try to use "git rm" it will stage the file, and we try to avoid staging files since
 	// it just complicates dealing with the file's state. We're only deleting files we have successfully locked anyway.
+	TArray<FString> DeletedFiles;
 	bool bSuccess = true;
 	for (const FString& Filename : InCommand.Files)
 	{
-		if (IFileManager::Get().Delete(*Filename))
+		bool bDidDelete = IFileManager::Get().Delete(*Filename);
+		if (bDidDelete)
 		{
-			bSuccess &= FriendshipperSourceControlUtils::CollectNewStates(InCommand.Files, States, EFileState::Deleted, ETreeState::Unset);
+			DeletedFiles.Add(Filename);
 		}
+		bSuccess &= bDidDelete;
 	}
+	FriendshipperSourceControlUtils::CollectNewStates(InCommand.Files, States, EFileState::Deleted, ETreeState::Unset);
 
-	if (bSuccess)
-	{
-		TMap<FString, FFriendshipperSourceControlState> UpdatedStates;
-		if (FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.Files, EFetchRemote::False, UpdatedStates))
-		{
-			FriendshipperSourceControlUtils::CollectNewStates(UpdatedStates, States);
-		}
-		FriendshipperSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
-	}
+	FriendshipperSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 
 	return bSuccess;
 }
@@ -295,54 +286,6 @@ bool FFriendshipperDeleteWorker::Execute(FFriendshipperSourceControlCommand& InC
 bool FFriendshipperDeleteWorker::UpdateStates() const
 {
 	return FriendshipperSourceControlUtils::UpdateCachedStates(States);
-}
-
-
-// Get lists of Missing files (ie "deleted"), Modified files, and "other than Added" Existing files
-void GetMissingVsExistingFiles(const TArray<FString>& InFiles, TArray<FString>& OutMissingFiles, TArray<FString>& OutAllExistingFiles, TArray<FString>& OutOtherThanAddedExistingFiles, TArray<FString>& OutUntrackedMissingLockedFiles)
-{
-	FFriendshipperSourceControlModule& GitSourceControl = FFriendshipperSourceControlModule::Get();
-	FFriendshipperSourceControlProvider& Provider = GitSourceControl.GetProvider();
-
-	const TArray<FString> Files = (InFiles.Num() > 0) ? (InFiles) : (Provider.GetFilesInCache());
-
-	TArray<TSharedRef<ISourceControlState, ESPMode::ThreadSafe>> LocalStates;
-	Provider.GetState(Files, LocalStates, EStateCacheUsage::Use);
-	for (const auto& State : LocalStates)
-	{
-		if (FPaths::FileExists(State->GetFilename()))
-		{
-			if (State->IsAdded())
-			{
-				OutAllExistingFiles.Add(State->GetFilename());
-			}
-			else if (State->IsModified())
-			{
-				OutOtherThanAddedExistingFiles.Add(State->GetFilename());
-				OutAllExistingFiles.Add(State->GetFilename());
-			}
-			else if (State->CanRevert()) // for locked but unmodified files
-			{
-				OutOtherThanAddedExistingFiles.Add(State->GetFilename());
-			}
-		}
-		else
-		{
-			if (State->CanRevert() && !State->IsModified()) // for locked but unmodified files
-			{
-				OutUntrackedMissingLockedFiles.Add(State->GetFilename());
-			}
-			else if (State->IsSourceControlled() && !State->IsDeleted())
-			{
-				// If already queued for deletion, don't try to delete again
-				OutMissingFiles.Add(State->GetFilename());
-			}
-			else if (State->IsDeleted())
-			{
-				OutOtherThanAddedExistingFiles.Add(State->GetFilename());
-			}
-		}
-	}
 }
 
 FName FFriendshipperRevertWorker::GetName() const
@@ -354,117 +297,24 @@ bool FFriendshipperRevertWorker::Execute(FFriendshipperSourceControlCommand& InC
 {
 	bool bSuccess = true;
 
-	// Filter files by status
-	TArray<FString> MissingFiles;
-	TArray<FString> AllExistingFiles;
-	TArray<FString> OtherThanAddedExistingFiles;
-	TArray<FString> UntrackedMissingLockedFiles;
-	GetMissingVsExistingFiles(InCommand.Files, MissingFiles, AllExistingFiles, OtherThanAddedExistingFiles, UntrackedMissingLockedFiles);
+	FFriendshipperSourceControlModule& GitSourceControl = FFriendshipperSourceControlModule::Get();
+	FFriendshipperSourceControlProvider& Provider = GitSourceControl.GetProvider();
+	FFriendshipperClient& Client = Provider.GetFriendshipperClient();
 
-	const bool bRevertAll = InCommand.Files.Num() < 1;
-	if (bRevertAll)
+	UE_LOG(LogSourceControl, Log, TEXT("Running Friendshipper revert operation"));
+
+	const FString ProjectDir = IFileManager::Get().ConvertToAbsolutePathForExternalAppForRead(*FPaths::ProjectDir());
+	TArray<FString> RelativePaths = FriendshipperSourceControlUtils::RelativeFilenames(InCommand.Files, ProjectDir);
+
+	if (Client.Revert(RelativePaths) == false)
 	{
-		TArray<FString> Parms;
-		Parms.Add(TEXT("--hard"));
-		bSuccess &= FriendshipperSourceControlUtils::RunCommand(TEXT("reset"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, Parms, FFriendshipperSourceControlModule::GetEmptyStringArray(), InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-
-		Parms.Reset(2);
-		Parms.Add(TEXT("-f")); // force
-		Parms.Add(TEXT("-d")); // remove directories
-		bSuccess &= FriendshipperSourceControlUtils::RunCommand(TEXT("clean"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, Parms, FFriendshipperSourceControlModule::GetEmptyStringArray(), InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
+		UE_LOG(LogSourceControl, Error, TEXT("Failed to run revert"));
+		return false;
 	}
-	else
-	{
-		if (MissingFiles.Num() > 0)
-		{
-			// "Added" files that have been deleted needs to be removed from revision control
-			bSuccess &= FriendshipperSourceControlUtils::RunCommand(TEXT("rm"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FFriendshipperSourceControlModule::GetEmptyStringArray(), MissingFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-		}
-		if (AllExistingFiles.Num() > 0)
-		{
-			// reset any changes already added to the index
-			bSuccess &= FriendshipperSourceControlUtils::RunCommand(TEXT("reset"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FFriendshipperSourceControlModule::GetEmptyStringArray(), AllExistingFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-		}
-		if (OtherThanAddedExistingFiles.Num() > 0)
-		{
-			// revert any changes in working copy (this would fails if the asset was in "Added" state, since after "reset" it is now "untracked")
-			// may need to try a few times due to file locks from prior operations
-			bool CheckoutSuccess = false;
-			int32 Attempts = 10;
-			while( Attempts-- > 0 )
-			{
-				CheckoutSuccess = FriendshipperSourceControlUtils::RunCommand(TEXT("checkout"), InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FFriendshipperSourceControlModule::GetEmptyStringArray(), OtherThanAddedExistingFiles, InCommand.ResultInfo.InfoMessages, InCommand.ResultInfo.ErrorMessages);
-				if (CheckoutSuccess)
-				{
-					break;
-				}
-
-				FPlatformProcess::Sleep(0.1f);
-			}
-
-			bSuccess &= CheckoutSuccess;
-		}
-	}
-
-	// Unlock files
-	{
-		TArray<FString> LockedFiles;
-		FriendshipperSourceControlUtils::GetLockedFiles(InCommand.Files, LockedFiles);
-		if (LockedFiles.Num() > 0)
-		{
-			const TArray<FString> RelativeFiles = FriendshipperSourceControlUtils::RelativeFilenames(LockedFiles, InCommand.PathToGitRoot);
-
-			// Throw away the result here, this is an optimistic unlock
-			FFriendshipperSourceControlProvider& Provider = FFriendshipperSourceControlModule::Get().GetProvider();
-			FFriendshipperClient& Client = Provider.GetFriendshipperClient();
-
-			TArray<FString> FailedFiles;
-			if (Client.UnlockFiles(RelativeFiles, &FailedFiles, &InCommand.ResultInfo.ErrorMessages) == false)
-			{
-				return false;
-			}
-
-			for (const auto& File : LockedFiles)
-			{
-				bool bWasLocked = true;
-				for (FString& RelativeFile : FailedFiles)
-				{
-					if (File.EndsWith(RelativeFile))
-					{
-						bWasLocked = false;
-						break;
-					}
-				}
-
-				if (bWasLocked)
-				{
-					FFriendshipperLockedFilesCache::RemoveLockedFile(File);
-				}
-			}
-		}
-	}
-
-	// If no files were specified (full revert), refresh all relevant files instead of the specified files (which is an empty list in full revert)
-	// This is required so that files that were "Marked for add" have their status updated after a full revert.
-	TArray<FString> FilesToUpdate = InCommand.Files;
-	if (InCommand.Files.Num() <= 0)
-	{
-		for (const auto& File : MissingFiles) FilesToUpdate.Add(File);
-		for (const auto& File : AllExistingFiles) FilesToUpdate.Add(File);
-		for (const auto& File : OtherThanAddedExistingFiles) FilesToUpdate.Add(File);
-	}
-
-	// now update the status of our files
-	TMap<FString, FFriendshipperSourceControlState> UpdatedStates;
-	if (FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, FilesToUpdate, EFetchRemote::False, UpdatedStates))
-	{
-		FriendshipperSourceControlUtils::CollectNewStates(UpdatedStates, States);
-	}
-	FriendshipperSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
 	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
-	AssetRegistry.ScanModifiedAssetFiles(FilesToUpdate);
+	AssetRegistry.ScanModifiedAssetFiles(InCommand.Files);
 
 	return bSuccess;
 }
@@ -481,8 +331,7 @@ FName FFriendshipperFetch::GetName() const
 
 FText FFriendshipperFetch::GetInProgressString() const
 {
-	// TODO Configure origin
-	return LOCTEXT("SourceControl_Push", "Fetching from remote origin...");
+	return LOCTEXT("SourceControl_Fetch", "Fetching from remote origin...");
 }
 
 FName FFriendshipperFetchWorker::GetName() const
@@ -498,16 +347,15 @@ bool FFriendshipperFetchWorker::Execute(FFriendshipperSourceControlCommand& InCo
 	bool bSuccess = true;
 	if (Operation->bUpdateStatus)
 	{
-		// Now update the status of all our files
-		const TArray<FString> ProjectDirs {FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
-										   FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())};
-		TMap<FString, FFriendshipperSourceControlState> UpdatedStates;
-		bSuccess = FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, ProjectDirs, EFetchRemote::True, UpdatedStates);
-		if (bSuccess)
+		FFriendshipperSourceControlProvider& Provider = FFriendshipperSourceControlModule::Get().GetProvider();
+		FFriendshipperClient& Client = Provider.GetFriendshipperClient();
+
+		FRepoStatus RepoStatus;
+		if (Client.GetStatus(EForceStatusRefresh::True, RepoStatus))
 		{
-			FriendshipperSourceControlUtils::CollectNewStates(UpdatedStates, States);
+			TSet<FString> AllFiles = Provider.GetAllPathsAbsolute();
+			States = FriendshipperSourceControlUtils::FriendshipperStatesFromRepoStatus(InCommand.PathToRepositoryRoot, AllFiles, RepoStatus);
 		}
-		FriendshipperSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 	}
 
 	return bSuccess;
@@ -533,7 +381,7 @@ bool FFriendshipperUpdateStatusWorker::Execute(FFriendshipperSourceControlComman
 	if(InCommand.Files.Num() > 0)
 	{
 		TMap<FString, FFriendshipperSourceControlState> UpdatedStates;
-		bSuccess = FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.Files, EFetchRemote::False, UpdatedStates);
+		bSuccess = FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToRepositoryRoot, InCommand.Files, EForceStatusRefresh::False, UpdatedStates);
 		FriendshipperSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 		if (bSuccess)
 		{
@@ -565,7 +413,7 @@ bool FFriendshipperUpdateStatusWorker::Execute(FFriendshipperSourceControlComman
 		const TArray<FString> ProjectDirs {FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()), FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
 										   FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())};
 		TMap<FString, FFriendshipperSourceControlState> UpdatedStates;
-		bSuccess = FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, ProjectDirs, EFetchRemote::False, UpdatedStates);
+		bSuccess = FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToRepositoryRoot, ProjectDirs, EForceStatusRefresh::False, UpdatedStates);
 		FriendshipperSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
 		if (bSuccess)
 		{
@@ -641,7 +489,7 @@ bool FFriendshipperResolveWorker::Execute( class FFriendshipperSourceControlComm
 
 	// now update the status of our files
 	TMap<FString, FFriendshipperSourceControlState> UpdatedStates;
-	if (FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, InCommand.Files, EFetchRemote::False, UpdatedStates))
+	if (FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToRepositoryRoot, InCommand.Files, EForceStatusRefresh::False, UpdatedStates))
 	{
 		FriendshipperSourceControlUtils::CollectNewStates(UpdatedStates, States);
 	}

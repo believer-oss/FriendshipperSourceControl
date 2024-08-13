@@ -7,10 +7,10 @@
 USTRUCT()
 struct FUserInfo
 {
-		GENERATED_BODY()
+	GENERATED_BODY()
 
-		UPROPERTY()
-		FString Username;
+	UPROPERTY()
+	FString Username;
 };
 
 USTRUCT()
@@ -20,16 +20,37 @@ struct FStatusFileState
 
 	UPROPERTY()
 	FString Path;
+
 	UPROPERTY()
-	FString IndexState;
-	UPROPERTY()
-	FString WorkingState;
+	FString LockedBy;
 };
 
-enum class EFetchRemote : uint8
+enum class EForceStatusRefresh : uint8
 {
 	False,
 	True,
+};
+
+USTRUCT()
+struct FLfsLockOwner
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString Name;
+};
+
+USTRUCT()
+struct FLfsLock
+{
+
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString Path;
+
+	UPROPERTY()
+	FLfsLockOwner Owner;
 };
 
 USTRUCT()
@@ -89,17 +110,25 @@ struct FRepoStatus
 	TArray<FString> Conflicts;
 	UPROPERTY()
 	TArray<FString> ModifiedUpstream;
+
+	// locks
+	UPROPERTY()
+	TArray<FLfsLock> LocksOurs;
+
+	UPROPERTY()
+	TArray<FLfsLock> LocksTheirs;
 };
 
 USTRUCT()
-struct FPushResponse
+struct FRevertRequest
 {
 	GENERATED_BODY()
 
 	UPROPERTY()
-	bool PushAttempted = false;
+	TArray<FString> Files;
+
 	UPROPERTY()
-	TArray<FString> Conflicts;
+	bool SkipEngineCheck = true;
 };
 
 USTRUCT()
@@ -152,16 +181,18 @@ public:
 	void Init(const FString& Url);
 	void RefreshNonce();
 	bool Diff(TArray<FString>& OutResults);
-	bool GetStatus(EFetchRemote FetchRemote, FRepoStatus& OutStatus);
+	bool GetStatus(EForceStatusRefresh ForceRefresh, FRepoStatus& OutStatus);
 	bool GetUserInfo(FUserInfo& OutUserInfo);
-	bool GetOperationStatus(FRepoStatus& OutStatus);
 	bool CheckSystemStatus();
 	bool Submit(const FString& InCommitMsg, const TArray<FString>& InFiles);
+	bool Revert(const TArray<FString>& InFiles);
 	bool LockFiles(const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages);
 	bool UnlockFiles(const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages);
 
 	void AddNonceHeader(const TSharedRef<IHttpRequest>& Request) const;
-	
+
+	void OnRecievedHttpStatusUpdate(const FRepoStatus& RepoStatus);
+
 private:
 	static void PromptConflicts(TArray<FString>& Files);
 
@@ -169,6 +200,9 @@ private:
 
 	// Friendshipper service URL - probably http://localhost:8484
 	FString ServiceUrl;
+
+	FRWLock LastRepoStatusLock;
+	TOptional<FRepoStatus> LastRepoStatus;
 
 	// Nonce auth token - read from %APPDATA%/Friendshipper/data/.nonce
 	mutable FRWLock NonceKeyLock;

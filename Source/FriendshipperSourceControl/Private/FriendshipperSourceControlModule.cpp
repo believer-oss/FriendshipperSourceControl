@@ -110,11 +110,14 @@ void FFriendshipperSourceControlModule::StartupModule()
 	CBAssetMenuExtenderDelegates.Add(FContentBrowserMenuExtender_SelectedAssets::CreateStatic(&FFriendshipperSourceControlModule::OnExtendContentBrowserAssetSelectionMenu));
 	CbdHandle_OnExtendAssetSelectionMenu = CBAssetMenuExtenderDelegates.Last().GetHandle();
 
+	HttpRouter.OnStatusUpdateRecieved.BindRaw(&FriendshipperSourceControlProvider, &FFriendshipperSourceControlProvider::OnRecievedHttpStatusUpdate);
 	HttpRouter.OnModuleStartup();
 }
 
 void FFriendshipperSourceControlModule::ShutdownModule()
 {
+	HttpRouter.OnStatusUpdateRecieved.Unbind();
+
 	// shut down the provider, as this module is going away
 	FriendshipperSourceControlProvider.Close();
 
