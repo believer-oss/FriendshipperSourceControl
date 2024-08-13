@@ -14,7 +14,6 @@
 #include "FriendshipperSourceControlModule.h"
 #include "FriendshipperSourceControlUtils.h"
 #include "SFriendshipperSourceControlSettings.h"
-#include "FriendshipperSourceControlRunner.h"
 #include "Logging/MessageLog.h"
 #include "ScopedSourceControlProgress.h"
 #include "SourceControlHelpers.h"
@@ -30,12 +29,14 @@
 #include "HttpModule.h"
 #include "HttpServerModule.h"
 #include "FileHelpers.h"
+#include "DirectoryWatcherModule.h"
+#include "IDirectoryWatcher.h"
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
 
 static FName ProviderName("Friendshipper");
 
-void FFriendshipperSourceControlProvider::Init(bool bForceConnection)
+void FFriendshipperSourceControlProvider::Init(bool bUnusedForceConnection)
 {
 	// Init() is called multiple times at startup: do not check git each time
 	if (!bGitAvailable)
@@ -54,8 +55,6 @@ void FFriendshipperSourceControlProvider::Init(bool bForceConnection)
 		FriendshipperClient.Init("http://localhost:8484");
 		bFriendshipperAvailable = true;
 	}
-
-	// bForceConnection: not used anymore
 }
 
 void FFriendshipperSourceControlProvider::CheckGitAvailability()
@@ -144,6 +143,7 @@ void FFriendshipperSourceControlProvider::CheckRepositoryStatus()
 			}
 			FriendshipperSourceControlUtils::GetRemoteBranchName(PathToGitBinary, PathToRepositoryRoot, RemoteBranchName);
 			FriendshipperSourceControlUtils::GetRemoteUrl(PathToGitBinary, PathToRepositoryRoot, RemoteUrl);
+
 			const TArray<FString> Files{ TEXT("*.uasset"), TEXT("*.umap") };
 			TArray<FString> LockableErrorMessages;
 			if (!FriendshipperSourceControlUtils::CheckLFSLockable(PathToGitBinary, PathToRepositoryRoot, Files, LockableErrorMessages))
@@ -153,29 +153,39 @@ void FFriendshipperSourceControlProvider::CheckRepositoryStatus()
 					UE_LOG(LogSourceControl, Error, TEXT("%s"), *ErrorMessage);
 				}
 			}
-			const TArray<FString> ProjectDirs{ FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
-				FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
-				FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()) };
-			TArray<FString> StatusErrorMessages;
-			if (!FriendshipperSourceControlUtils::RunUpdateStatus(PathToGitBinary, PathToRepositoryRoot, ProjectDirs, EFetchRemote::True, States))
-			{
-				return false;
-			}
-			return true;
+
+			FRepoStatus UnusedStatus;
+			return FriendshipperClient.GetStatus(EForceStatusRefresh::True, UnusedStatus);
 		};
+
 		if (ConditionalRepoInit())
 		{
-			TUniqueFunction<void()> SuccessFunc = [States, this]()
+			bGitRepositoryFound = true;
+
+			if (FileWatchHandles.IsEmpty())
 			{
-				TMap<const FString, FFriendshipperState> Results;
-				if (FriendshipperSourceControlUtils::CollectNewStates(States, Results))
+				if (FDirectoryWatcherModule* Module = FModuleManager::Get().GetModulePtr<FDirectoryWatcherModule>("DirectoryWatcher"))
 				{
-					FriendshipperSourceControlUtils::UpdateCachedStates(Results);
+					if (IDirectoryWatcher* Watcher = Module->Get())
+					{
+						const FString Directories[] =
+						{
+							FPaths::ProjectConfigDir(),
+							FPaths::ProjectContentDir(),
+						};
+
+						auto Delegate = IDirectoryWatcher::FDirectoryChanged::CreateRaw(this, &FFriendshipperSourceControlProvider::OnFilesChanged);
+
+						for (const FString& Dir : Directories)
+						{
+							FFriendshipperFileWatchHandle Handle;
+							Watcher->RegisterDirectoryChangedCallback_Handle(Dir, Delegate, Handle.DelegateHandle);
+						}
+					}
 				}
-				Runner = new FFriendshipperSourceControlRunner();
-				bGitRepositoryFound = true;
-			};
-			AsyncTask(ENamedThreads::GameThread, MoveTemp(SuccessFunc));
+			}
+
+			RunFileRescanTask();
 		}
 		else
 		{
@@ -216,6 +226,17 @@ int32 FFriendshipperSourceControlProvider::GetNumLastErrors() const
 
 void FFriendshipperSourceControlProvider::Close()
 {
+	if (FDirectoryWatcherModule* Module = FModuleManager::Get().GetModulePtr<FDirectoryWatcherModule>("DirectoryWatcher"))
+	{
+		if (IDirectoryWatcher* Watcher = Module->Get())
+		{
+			for (const FFriendshipperFileWatchHandle& Handle : FileWatchHandles)
+			{
+				Watcher->UnregisterDirectoryChangedCallback_Handle(Handle.Directory, Handle.DelegateHandle);
+			}
+		}
+	}
+
 	// clear the cache
 	StateCache.Empty();
 	// Remove all extensions to the "Revision Control" menu in the Editor Toolbar
@@ -225,11 +246,6 @@ void FFriendshipperSourceControlProvider::Close()
 	bGitRepositoryFound = false;
 	UserName.Empty();
 	UserEmail.Empty();
-	if (Runner)
-	{
-		delete Runner;
-		Runner = nullptr;
-	}
 }
 
 TSharedRef<FFriendshipperSourceControlState, ESPMode::ThreadSafe> FFriendshipperSourceControlProvider::GetStateInternal(const FString& Filename)
@@ -471,7 +487,7 @@ void FFriendshipperSourceControlProvider::CancelOperation(const FSourceControlOp
 
 bool FFriendshipperSourceControlProvider::UsesLocalReadOnlyState() const
 {
-	return false;
+	return true;
 }
 
 bool FFriendshipperSourceControlProvider::UsesChangelists() const
@@ -857,6 +873,183 @@ TArray<FString> FFriendshipperSourceControlProvider::GetStatusBranchNames() cons
 	}
 
 	return StatusBranches;
+}
+
+TSet<FString> FFriendshipperSourceControlProvider::GetAllPathsAbsolute()
+{
+	auto Lock = FReadScopeLock(AllPathsAbsoluteLock);
+	return AllPathsAbsolute;
+}
+
+bool FFriendshipperSourceControlProvider::UpdateCachedStates(const TMap<const FString, FFriendshipperState>& InResults)
+{
+	check(IsInGameThread());
+
+	if (InResults.Num() == 0)
+	{
+		return false;
+	}
+
+	for (const auto& Pair : InResults)
+	{
+		TSharedRef<FFriendshipperSourceControlState, ESPMode::ThreadSafe> State = GetStateInternal(Pair.Key);
+
+		// Force a status update if we've got a new file - this isn't required for all new files but it appears
+		// the source control module handles the update sequencing a bit differently for new files that are the result
+		// of a "duplicate" operation. This appears to fix cases for both new and duplicate files.
+		const bool bForceUpdate = State->State.FileState == EFileState::Unknown && State->State.TreeState == ETreeState::NotInRepo;
+
+		const FFriendshipperState& NewState = Pair.Value;
+		if (NewState.FileState != EFileState::Unset)
+		{
+			// Invalid transition
+			if (NewState.FileState == EFileState::Added && !State->IsUnknown() && !State->CanAdd())
+			{
+				continue;
+			}
+
+			State->State.FileState = NewState.FileState;
+		}
+		if (NewState.TreeState != ETreeState::Unset)
+		{
+			State->State.TreeState = NewState.TreeState;
+		}
+		// If we're updating lock state, also update user
+		if (NewState.LockState != ELockState::Unset)
+		{
+			State->State.LockState = NewState.LockState;
+			State->State.LockUser = NewState.LockUser;
+		}
+		if (NewState.RemoteState != ERemoteState::Unset)
+		{
+			State->State.RemoteState = NewState.RemoteState;
+			if (NewState.RemoteState == ERemoteState::UpToDate)
+			{
+				State->State.HeadBranch = TEXT("");
+			}
+			else
+			{
+				State->State.HeadBranch = NewState.HeadBranch;
+			}
+		}
+
+		State->TimeStamp = bForceUpdate ? FDateTime::MinValue() : FDateTime::Now();
+
+		// We've just updated the state, no need for UpdateStatus to be ran for this file again.
+		AddFileToIgnoreForceCache(State->LocalFilename);
+	}
+
+	return true;
+}
+
+void FFriendshipperSourceControlProvider::RefreshCacheFromSavedState()
+{
+	check(IsInGameThread());
+
+	FRepoStatus RepoStatus;
+	if (FriendshipperClient.GetStatus(EForceStatusRefresh::False, RepoStatus))
+	{
+		TMap<const FString, FFriendshipperState> States;
+		{
+			auto Lock = FReadScopeLock(AllPathsAbsoluteLock);
+			States = FriendshipperSourceControlUtils::FriendshipperStatesFromRepoStatus(PathToRepositoryRoot, AllPathsAbsolute, RepoStatus);
+		}
+		UpdateCachedStates(States);
+
+		// Trigger a callback to anyone listening for state updates next tick
+		if (TicksUntilNextForcedUpdate <= 0)
+		{
+			TicksUntilNextForcedUpdate = 1;
+		}
+	}
+}
+
+void FFriendshipperSourceControlProvider::RunFileRescanTask()
+{
+	const FString GitBinaryPath = PathToGitBinary;
+	const FString RepoRoot = PathToRepositoryRoot;
+
+	auto RescanTaskFunc = [GitBinaryPath, RepoRoot]()
+		{
+			const TArray<FString> ProjectDirs
+			{
+				FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
+				FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
+			};
+
+			TUniquePtr<TSet<FString>> AllFiles = MakeUnique<TSet<FString>>();
+			for (const FString& DirPath : ProjectDirs)
+			{
+				TArray<FString> Files;
+				FriendshipperSourceControlUtils::ListFilesInDirectoryRecurse(GitBinaryPath, RepoRoot, DirPath, Files);
+				AllFiles->Append(MoveTemp(Files));
+			}
+
+			if (AllFiles->Num() > 0)
+			{
+				AsyncTask(ENamedThreads::GameThread, [Files = std::move(AllFiles)]()
+					{
+						if (FFriendshipperSourceControlModule* SCC = FFriendshipperSourceControlModule::GetThreadSafe())
+						{
+							FFriendshipperSourceControlProvider& Provider = SCC->GetProvider();
+
+							{
+								auto Lock = FWriteScopeLock(Provider.AllPathsAbsoluteLock);
+								Provider.AllPathsAbsolute = MoveTemp(*Files);
+							}
+
+							Provider.bAllPathsScanInProgress = false;
+							Provider.RefreshCacheFromSavedState();
+						}
+					});
+			}
+		};
+
+	if (IsInGameThread())
+	{
+		// UE::Tasks::FTask Task = UE::Tasks::Launch(
+		// UE_SOURCE_LOCATION, [GitBinaryPath, RepoRoot]
+
+		// ListFilesInDirectoryRecurse() calls git ls-files, which is an expensive operation, taking 1.75s to enumerate 22k files.
+		// Running this on a background thread is fine since it doesn't touch the index. After it's done, just run another task
+		// to update the provider data on the main thread to avoid any locking behavior.
+		AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, MoveTemp(RescanTaskFunc));
+	}
+	else
+	{
+		RescanTaskFunc();
+	}
+}
+
+void FFriendshipperSourceControlProvider::OnFilesChanged(const TArray<struct FFileChangeData>& FileChanges)
+{
+	if (bAllPathsScanInProgress)
+	{
+		return;
+	}
+
+	bool bNeedsRescan = false;
+	for (const FFileChangeData& Change : FileChanges)
+	{
+		if (Change.Action == FFileChangeData::FCA_Added ||
+			Change.Action == FFileChangeData::FCA_Removed ||
+			Change.Action == FFileChangeData::FCA_RescanRequired) {
+				bNeedsRescan = true;
+				break;
+		}
+	}
+
+	if (bNeedsRescan)
+	{
+		RunFileRescanTask();
+	}
+}
+
+void FFriendshipperSourceControlProvider::OnRecievedHttpStatusUpdate(const FRepoStatus& RepoStatus)
+{
+	FriendshipperClient.OnRecievedHttpStatusUpdate(RepoStatus);
+
+	RefreshCacheFromSavedState();
 }
 
 #undef LOCTEXT_NAMESPACE

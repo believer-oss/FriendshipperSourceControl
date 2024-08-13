@@ -7,6 +7,7 @@
 #include "FriendshipperHttpRouter.generated.h"
 
 struct FAssetFriendlyName;
+struct FRepoStatus;
 
 USTRUCT()
 struct FOfpaFriendlyNameRequest
@@ -26,10 +27,14 @@ struct FOfpaFriendlyNameResponse
 	TArray<FAssetFriendlyName> Names;
 };
 
+DECLARE_DELEGATE_OneParam(FOnStatusUpdate, const FRepoStatus& RepoStatus);
+
 struct FFriendshipperHttpRouter
 {
 	void OnModuleStartup();
 	void OnModuleShutdown();
+
+	FOnStatusUpdate OnStatusUpdateRecieved;
 
 	TArray<FHttpRouteHandle> Routes;
 };

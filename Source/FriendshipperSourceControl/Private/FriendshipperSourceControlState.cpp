@@ -221,12 +221,6 @@ bool FFriendshipperSourceControlState::CanCheckIn() const
 		return true;
 	}
 
-	// We can check in any file that has been modified, unless someone else locked it.
-	if (State.LockState != ELockState::LockedOther && IsModified() && IsSourceControlled())
-	{
-		return true;
-	}
-
 	return false;
 }
 
@@ -256,19 +250,7 @@ bool FFriendshipperSourceControlState::CanCheckout() const
 
 bool FFriendshipperSourceControlState::IsCheckedOut() const
 {
-	if (State.LockState == ELockState::Unlockable)
-	{
-		return IsSourceControlled(); // TODO: try modified instead? might block editing the file with a holding pattern
-	}
-	else if (State.TreeState == ETreeState::Untracked)
-	{
-		return false;
-	}
-	else
-	{
-		// We check for modified here too, because sometimes you don't lock a file but still want to push it. CanCheckout still true, so that you can lock it later...
-		return State.LockState == ELockState::Locked || (State.FileState == EFileState::Modified && State.LockState != ELockState::LockedOther);
-	}
+	return State.TreeState != ETreeState::Untracked && State.LockState == ELockState::Locked;
 }
 
 bool FFriendshipperSourceControlState::IsCheckedOutOther(FString* Who) const

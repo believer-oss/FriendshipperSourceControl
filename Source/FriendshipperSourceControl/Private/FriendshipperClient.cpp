@@ -127,7 +127,7 @@ static bool RequestLockOperation(TSharedRef<IHttpRequest> Request, FFriendshippe
 	return true;
 }
 
-///////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // FFriendshipperClient
 
 FFriendshipperClient::FFriendshipperClient() = default;
@@ -142,6 +142,11 @@ TSharedRef<IHttpRequest> FFriendshipperClient::CreateRequest(const FString& Path
 	Request->SetHeader("Content-Type", TEXT("application/json"));
 	AddNonceHeader(Request);
 	Request->SetVerb(Method);
+
+	// Submits are potentially long operations, so we set a long timeout
+	Request->SetTimeout(300);
+	Request->SetActivityTimeout(300);
+	
 	Request->SetURL(uri);
 
 	return Request;
@@ -151,6 +156,12 @@ void FFriendshipperClient::AddNonceHeader(const TSharedRef<IHttpRequest>& Reques
 {
 	FReadScopeLock Lock = FReadScopeLock(NonceKeyLock);
 	Request->SetHeader("X-Ethos-Nonce", NonceKey);
+}
+
+void FFriendshipperClient::OnRecievedHttpStatusUpdate(const FRepoStatus& RepoStatus)
+{
+	FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
+	LastRepoStatus = RepoStatus;
 }
 
 bool FFriendshipperClient::Diff(TArray<FString>& OutResults)
@@ -207,69 +218,61 @@ bool FFriendshipperClient::GetUserInfo(FUserInfo& OutUserInfo)
 	else
 	{
 		UE_LOG(LogSourceControl, Error, TEXT("HTTP request failed."))
-
 		return false;
 	}
 
 	return true;
 }
 
-bool FFriendshipperClient::GetStatus(EFetchRemote FetchRemote, FRepoStatus& OutStatus)
+bool FFriendshipperClient::GetStatus(EForceStatusRefresh ForceRefresh, FRepoStatus& OutStatus)
 {
-	const TCHAR* SkipFetchArg = (FetchRemote == EFetchRemote::False) ? TEXT("true") : TEXT("false");
-	FString Path = FString::Printf(TEXT("repo/status?skipFetch=%s&skipDllCheck=true"), SkipFetchArg);
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(Path, TEXT("GET"));
-
-	ProcessRequestAndWait(pRequest, *this);
-
-	if (const TSharedPtr<IHttpResponse> Response = pRequest->GetResponse())
+	bool bIsSet = false;
 	{
-		if (Response->GetResponseCode() != 0)
-		{
-			const FString& ResponseBody = Response->GetContentAsString();
+		FReadScopeLock Lock = FReadScopeLock(LastRepoStatusLock);
+		bIsSet = LastRepoStatus.IsSet();
+	}
 
-			if (!FJsonObjectConverter::JsonObjectStringToUStruct(Response->GetContentAsString(), &OutStatus, 0, 0))
+	if ((bIsSet == false) || (ForceRefresh == EForceStatusRefresh::True))
+	{
+		const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/status?skipDllCheck=true&skipEngineUpdate=true"), TEXT("GET"));
+
+		ProcessRequestAndWait(pRequest, *this);
+
+		if (const TSharedPtr<IHttpResponse> Response = pRequest->GetResponse())
+		{
+			if (Response->GetResponseCode() != 0)
 			{
-				UE_LOG(LogSourceControl, Log, TEXT("Error decoding Status - body: %s"), *ResponseBody)
+				const FString& ResponseBody = Response->GetContentAsString();
+
+				FRepoStatus TempStatus;
+				if (FJsonObjectConverter::JsonObjectStringToUStruct(Response->GetContentAsString(), &TempStatus, 0, 0))
+				{
+					FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
+					LastRepoStatus = TempStatus;
+				}
+				else
+				{
+					UE_LOG(LogSourceControl, Log, TEXT("GetStatus: Error decoding json: %s"), *ResponseBody);
+					return false;
+				}
+			}
+			else
+			{
+				UE_LOG(LogSourceControl, Log, TEXT("GetStatus returned response error code: %d"), Response->GetResponseCode());
+				return false;
 			}
 		}
-	}
-	else
-	{
-		UE_LOG(LogSourceControl, Error, TEXT("HTTP request failed."))
-
-		return false;
-	}
-
-	return true;
-}
-
-bool FFriendshipperClient::GetOperationStatus(FRepoStatus& OutStatus)
-{
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/operation-in-progress"), TEXT("GET"));
-
-	ProcessRequestAndWait(pRequest, *this);
-
-	if (const TSharedPtr<IHttpResponse> Response = pRequest->GetResponse())
-	{
-		if (Response->GetResponseCode() != 0)
+		else
 		{
-			const FString& ResponseBody = Response->GetContentAsString();
-			TSharedRef<TJsonReader<>> JsonReader = TJsonReaderFactory<>::Create(ResponseBody);
-
-			if (!FJsonObjectConverter::JsonObjectStringToUStruct(Response->GetContentAsString(), &OutStatus, 0, 0))
-			{
-				UE_LOG(LogSourceControl, Log, TEXT("Error decoding Status - body: %s"), *ResponseBody)
-			}
+			UE_LOG(LogSourceControl, Error, TEXT("HTTP request failed."))
+			FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
+			LastRepoStatus.Reset();
+			return false;
 		}
 	}
-	else
-	{
-		UE_LOG(LogSourceControl, Error, TEXT("HTTP request failed."))
 
-		return false;
-	}
-
+	FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
+	OutStatus = *LastRepoStatus;
 	return true;
 }
 
@@ -313,6 +316,45 @@ bool FFriendshipperClient::Submit(const FString& InCommitMsg, const TArray<FStri
 	{
 		UE_LOG(LogSourceControl, Error, TEXT("Submit: HTTP request failed."));
 
+		return false;
+	}
+
+	return true;
+}
+
+bool FFriendshipperClient::Revert(const TArray<FString>& InFiles)
+{
+	FString Body;
+	{
+		FRevertRequest Request;
+		Request.Files = InFiles;
+		Request.SkipEngineCheck = true;
+
+		bool bSuccess = FJsonObjectConverter::UStructToJsonObjectString(Request, Body);
+		ensure(bSuccess);
+	}
+
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/revert"), TEXT("POST"));
+	Request->SetContentAsString(Body);
+
+	ProcessRequestAndWait(Request, *this);
+
+	if (const TSharedPtr<IHttpResponse> Response = Request->GetResponse())
+	{
+		if (Response->GetResponseCode() == 200)
+		{
+			UE_LOG(LogSourceControl, Log, TEXT("Successfully reverted files."));
+		}
+		else
+		{
+			const FString& ResponseBody = Response->GetContentAsString();
+			UE_LOG(LogSourceControl, Error, TEXT("Failed to revert files. EHttpErrorCode: %d. Error: %s"), Response->GetResponseCode(), *ResponseBody);
+			return false;
+		}
+	}
+	else
+	{
+		UE_LOG(LogSourceControl, Error, TEXT("Revert: HTTP request failed."));
 		return false;
 	}
 

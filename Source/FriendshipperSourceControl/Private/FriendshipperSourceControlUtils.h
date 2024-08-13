@@ -10,7 +10,8 @@
 
 class FFriendshipperSourceControlState;
 class FFriendshipperSourceControlCommand;
-enum class EFetchRemote : uint8;
+struct FRepoStatus;
+enum class EForceStatusRefresh : uint8;
 
 /**
  * Helper struct for maintaining temporary files for passing to commands
@@ -34,25 +35,6 @@ private:
 };
 
 struct FFriendshipperVersion;
-
-class FFriendshipperLockedFilesCache
-{
-public:
-	static FDateTime LastUpdated;
-
-	static TMap<FString, FString> GetLockedFiles();
-	static void SetLockedFiles(const TMap<FString, FString>& newLocks);
-	static void AddLockedFile(const FString& filePath, const FString& lockUser);
-	static void RemoveLockedFile(const FString& filePath);
-
-	private:
-	static void OnFileLockChanged(const FString& filePath, const FString& lockUser, bool locked);
-
-	// update local read/write state when our own lock statuses change
-	static TMap<FString, FString> LockedFiles;
-
-	static FCriticalSection Mutex;
-};
 
 namespace FriendshipperSourceControlUtils
 {
@@ -213,7 +195,9 @@ namespace FriendshipperSourceControlUtils
 	 * @param   OutStates           The resultant states
 	 * @returns true if the command succeeded and returned no errors
 	 */
-	bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, EFetchRemote FetchRemote, TMap<FString, FFriendshipperSourceControlState>& OutStates);
+	bool RunUpdateStatus(const FString& InRepositoryRoot, const TArray<FString>& InFiles, EForceStatusRefresh FetchRemote, TMap<FString, FFriendshipperSourceControlState>& OutStates);
+
+	TMap<const FString, FFriendshipperState> FriendshipperStatesFromRepoStatus(const FString& InRepositoryRoot, const TSet<FString>& AllTrackedFilesAbsolutePaths, const FRepoStatus& RepoStatus);
 
 	/**
 	 * Run a Git "cat-file" command to dump the binary content of a revision into a file.
@@ -270,15 +254,13 @@ namespace FriendshipperSourceControlUtils
 
 	/**
 	* Helper function for various commands to collect new states.
-	* @returns true if any states were updated
 	*/
-	bool CollectNewStates(const TMap<FString, FFriendshipperSourceControlState>& InStates, TMap<const FString, FFriendshipperState>& OutResults);
+	void CollectNewStates(const TMap<FString, FFriendshipperSourceControlState>& InStates, TMap<const FString, FFriendshipperState>& OutResults);
 
 	/**
 	 * Helper function for various commands to collect new states.
-	 * @returns true if any states were updated
 	 */
-	bool CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FFriendshipperState>& OutResults, EFileState::Type FileState, ETreeState::Type TreeState = ETreeState::Unset, ELockState::Type LockState = ELockState::Unset, ERemoteState::Type RemoteState = ERemoteState::Unset);
+	void CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FFriendshipperState>& OutResults, EFileState::Type FileState, ETreeState::Type TreeState = ETreeState::Unset, ELockState::Type LockState = ELockState::Unset, ERemoteState::Type RemoteState = ERemoteState::Unset);
 
 	/**
 		 * Run 'git lfs locks" to extract all lock information for all files in the repository

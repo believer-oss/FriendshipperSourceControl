@@ -79,69 +79,6 @@ const FString& FFriendshipperScopedTempFile::GetFilename() const
 	return Filename;
 }
 
-FDateTime FFriendshipperLockedFilesCache::LastUpdated = FDateTime::MinValue();
-TMap<FString, FString> FFriendshipperLockedFilesCache::LockedFiles = TMap<FString, FString>();
-FCriticalSection FFriendshipperLockedFilesCache::Mutex;
-
-TMap<FString, FString> FFriendshipperLockedFilesCache::GetLockedFiles()
-{
-	TMap<FString, FString> Copy;
-	{
-		FScopeLock Lock(&Mutex);
-		Copy = LockedFiles;
-	}
-	return Copy;
-}
-
-void FFriendshipperLockedFilesCache::SetLockedFiles(const TMap<FString, FString>& newLocks)
-{	
-	FScopeLock Lock(&Mutex);
-
-	for (auto lock : LockedFiles)
-	{
-		if (!newLocks.Contains(lock.Key))
-		{
-			OnFileLockChanged(lock.Key, lock.Value, false);
-		}
-	}
-	
-	for (auto lock : newLocks)
-	{		
-		if (!LockedFiles.Contains(lock.Key))
-		{
-			OnFileLockChanged(lock.Key, lock.Value, true);
-		}		
-	}
-
-	LockedFiles = newLocks;
-}
-
-void FFriendshipperLockedFilesCache::AddLockedFile(const FString& filePath, const FString& lockUser)
-{
-	FScopeLock Lock(&Mutex);
-
-	LockedFiles.Add(filePath, lockUser);
-	OnFileLockChanged(filePath, lockUser, true);
-}
-
-void FFriendshipperLockedFilesCache::RemoveLockedFile(const FString& filePath)
-{
-
-	FScopeLock Lock(&Mutex);
-	FString user;
-	LockedFiles.RemoveAndCopyValue(filePath, user);
-	OnFileLockChanged(filePath, user, false);
-}
-
-void FFriendshipperLockedFilesCache::OnFileLockChanged(const FString& filePath, const FString& lockUser, bool locked)
-{
-	const FString& LfsUserName = FFriendshipperSourceControlModule::Get().GetProvider().GetLockUser();
-	if (LfsUserName == lockUser)
-	{
-		FPlatformFileManager::Get().GetPlatformFile().SetReadOnly(*filePath, !locked);		
-	}
-}
-
 namespace FriendshipperSourceControlUtils
 {
 	FString ChangeRepositoryRootIfSubmodule(const TArray<FString>& AbsoluteFilePaths, const FString& PathToRepositoryRoot)
@@ -967,8 +904,7 @@ bool ListFilesInDirectoryRecurse(const FString& InPathToGitBinary, const FString
 }
 
 // Called in case of a refresh of status on a list of assets in the Content Browser, periodic update, or user manually refreshed.
-static void ParseFileStatusResult(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TSet<FString>& InFiles,
-								  const FRepoStatus& InRepoStatus, TMap<FString, FFriendshipperSourceControlState>& OutStates)
+static void ParseFileStatusResult(const TSet<FString>& InFiles, const FRepoStatus& InRepoStatus, TMap<FString, FFriendshipperSourceControlState>& OutStates)
 {
 	FFriendshipperSourceControlModule* GitSourceControl = FFriendshipperSourceControlModule::GetThreadSafe();
 	if (!GitSourceControl)
@@ -979,7 +915,6 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 	const FString& LfsUserName = Provider.GetLockUser();
 
 	TMap<FString, FString> LockedFiles;
-	bool bCheckedLockedFiles = false;
 
 	FString Result;
 
@@ -1040,20 +975,26 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 
 		if (IsFileLFSLockable(File))
 		{
-			if (!bCheckedLockedFiles)
+			if (LockedFiles.IsEmpty())
 			{
-				bCheckedLockedFiles = true;
-				TArray<FString> ErrorMessages;
-				GetAllLocks(InRepositoryRoot, InPathToGitBinary, ErrorMessages, LockedFiles);
-				FTSMessageLog SourceControlLog("SourceControl");
-				for (int32 ErrorIndex = 0; ErrorIndex < ErrorMessages.Num(); ++ErrorIndex)
+				const FString ProjectDir = IFileManager::Get().ConvertToAbsolutePathForExternalAppForRead(*FPaths::ProjectDir());
+
+				LockedFiles.Reserve(InRepoStatus.LocksOurs.Num() + InRepoStatus.LocksTheirs.Num());
+				for (const FLfsLock& Lock : InRepoStatus.LocksOurs)
 				{
-					SourceControlLog.Error(FText::FromString(ErrorMessages[ErrorIndex]));
+					FString AbsolutePath = FPaths::ConvertRelativePathToFull(ProjectDir, Lock.Path);
+					LockedFiles.Add(AbsolutePath, Lock.Owner.Name);
+				}
+				for (const FLfsLock& Lock : InRepoStatus.LocksTheirs)
+				{
+					FString AbsolutePath = FPaths::ConvertRelativePathToFull(ProjectDir, Lock.Path);
+					LockedFiles.Add(AbsolutePath, Lock.Owner.Name);
 				}
 			}
-			if (LockedFiles.Contains(File))
+
+			if (const FString* LockUser = LockedFiles.Find(File))
 			{
-				FileState.State.LockUser = LockedFiles[File];
+				FileState.State.LockUser = *LockUser;
 				if (LfsUserName == FileState.State.LockUser)
 				{
 					FileState.State.LockState = ELockState::Locked;
@@ -1077,45 +1018,6 @@ static void ParseFileStatusResult(const FString& InPathToGitBinary, const FStrin
 	}
 }
 
-/**
- * @brief Detects how to parse the result of a "status" command to get workspace file states
- *
- *  It is either a command for a whole directory (ie. "Content/", in case of "Submit to Revision Control" menu),
- * or for one or more files all on a same directory (by design, since we group files by directory in RunUpdateStatus())
- *
- * @param[in]	InPathToGitBinary	The path to the Git binary
- * @param[in]	InRepositoryRoot	The Git repository from where to run the command - usually the Game directory (can be empty)
- * @param[in]	InFiles				List of files in a directory, or the path to the directory itself (never empty).
- * @param[out]	InRepoStatus		Results from the "status" command
- * @param[out]	OutStates			States of files for witch the status has been gathered (distinct than >	UnrealEditor-FriendshipperSourceControl-Win64-DebugGame.dll!FriendshipperSourceControlUtils::ParseFileStatusResult(const FString & InPathToGitBinary, const FString & InRepositoryRoot, const TSet<FString,DefaultKeyFuncs<FString,0>,FDefaultSetAllocator> & InFiles, const FRepoStatus & InRepoStatus, TMap<FString,FFriendshipperSourceControlState,FDefaultSetAllocator,TDefaultMapHashableKeyFuncs<FString,FFriendshipperSourceControlState,0>> & OutStates) Line 1269	C++
-InFiles in case of a "directory status")
- */
-static void ParseStatusResults(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles,
-							   const FRepoStatus& InRepoStatus, TMap<FString, FFriendshipperSourceControlState>& OutStates)
-{
-	TSet<FString> Files;
-	for (const auto& File : InFiles)
-	{
-		if (FPaths::DirectoryExists(File))
-		{
-			TArray<FString> DirectoryFiles;
-			const bool bResult = ListFilesInDirectoryRecurse(InPathToGitBinary, InRepositoryRoot, File, DirectoryFiles);
-			if (bResult)
-			{
-				for (const auto& InnerFile : DirectoryFiles)
-				{
-					Files.Add(InnerFile);
-				}
-			}
-		}
-		else
-		{
-			Files.Add(File);
-		}
-	}
-	ParseFileStatusResult(InPathToGitBinary, InRepositoryRoot, Files, InRepoStatus, OutStates);
-}
-
 void CheckRemote(const FString& InRepositoryRoot, const FRepoStatus& InStatus, TMap<FString, FFriendshipperSourceControlState>& OutStates)
 {
 	// We can obtain a list of files that were modified between our remote branches and HEAD. Assumes that fetch has been run to get accurate info.
@@ -1128,105 +1030,6 @@ void CheckRemote(const FString& InRepositoryRoot, const FRepoStatus& InStatus, T
 			FileState->State.HeadBranch = InStatus.RemoteBranch;
 		}
 	}
-}
-
-const FTimespan CacheLimit = FTimespan::FromSeconds(30);
-
-bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallback, TArray<FString>& OutErrorMessages, TMap<FString, FString>& OutLocks, bool bInvalidateCache)
-{
-	// You may ask, why are we ignoring state cache, and instead maintaining our own lock cache?
-	// The answer is that state cache updating is another operation, and those that update status
-	// (and thus the state cache) are using GetAllLocks. However, querying remote locks are almost always
-	// irrelevant in most of those update status cases. So, we need to provide a fast way to provide
-	// an updated local lock state. We could do this through the relevant lfs lock command arguments, which
-	// as you will see below, we use only for offline cases, but the exec cost of doing this isn't worth it
-	// when we can easily maintain this cache here. So, we are really emulating an internal Git LFS locks cache
-	// call, which gets fed into the state cache, rather than reimplementing the state cache :)
-	const FDateTime CurrentTime = FDateTime::Now();
-	bool bCacheExpired = bInvalidateCache;
-	if (!bInvalidateCache)
-	{
-		const FTimespan CacheTimeElapsed = CurrentTime - FFriendshipperLockedFilesCache::LastUpdated;
-		bCacheExpired = CacheTimeElapsed > CacheLimit;
-	}
-	bool bResult = false;
-	if (bCacheExpired)
-	{
-		// Our cache expired, or they asked us to expire cache. Query locks directly from the remote server.
-		TArray<FString> ErrorMessages;
-		TArray<FString> Results;
-		bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, FFriendshipperSourceControlModule::GetEmptyStringArray(), FFriendshipperSourceControlModule::GetEmptyStringArray(),
-								Results, OutErrorMessages);
-		if (bResult)
-		{
-			for (const FString& Result : Results)
-			{
-				FFriendshipperLfsLocksParser LockFile(InRepositoryRoot, Result);
-#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-#endif
-				OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
-			}
-			FFriendshipperLockedFilesCache::LastUpdated = CurrentTime;
-			FFriendshipperLockedFilesCache::SetLockedFiles(OutLocks);
-			return bResult;
-		}
-		// We tried to invalidate the UE cache, but we failed for some reason. Try updating lock state from LFS cache.
-		// Get the last known state of remote locks
-		TArray<FString> Params;
-		Params.Add(TEXT("--cached"));
-
-		FFriendshipperSourceControlModule* GitSourceControl = FFriendshipperSourceControlModule::GetThreadSafe();
-		if (!GitSourceControl)
-		{
-			bResult = false;
-		}
-		else
-		{
-			FFriendshipperSourceControlProvider& Provider = GitSourceControl->GetProvider();
-			const FString& LockUser = Provider.GetLockUser();
-
-			Results.Reset();
-			bResult = RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FFriendshipperSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
-			for (const FString& Result : Results)
-			{
-				FFriendshipperLfsLocksParser LockFile(InRepositoryRoot, Result);
-	#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-	#endif
-				// Only update remote locks
-				if (LockFile.LockUser != LockUser)
-				{
-					OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
-				}
-			}
-			// Get the latest local state of our own locks
-			Params.Reset(1);
-			Params.Add(TEXT("--local"));
-
-			Results.Reset();
-			bResult &= RunLFSCommand(TEXT("locks"), InRepositoryRoot, GitBinaryFallback, Params, FFriendshipperSourceControlModule::GetEmptyStringArray(), Results, OutErrorMessages);
-			for (const FString& Result : Results)
-			{
-				FFriendshipperLfsLocksParser LockFile(InRepositoryRoot, Result);
-	#if UE_BUILD_DEBUG && GIT_DEBUG_STATUS
-				UE_LOG(LogSourceControl, Log, TEXT("LockedFile(%s, %s)"), *LockFile.LocalFilename, *LockFile.LockUser);
-	#endif
-				// Only update local locks
-				if (LockFile.LockUser == LockUser)
-				{
-					OutLocks.Add(MoveTemp(LockFile.LocalFilename), MoveTemp(LockFile.LockUser));
-				}
-			}
-		}
-	}
-	if (!bResult)
-	{
-		// We can use our internally tracked local lock cache (an effective combination of --cached and --local)
-		OutLocks = FFriendshipperLockedFilesCache::GetLockedFiles();
-		bResult = true;
-	}
-	return bResult;
 }
 
 void GetLockedFiles(const TArray<FString>& InFiles, TArray<FString>& OutFiles)
@@ -1247,7 +1050,7 @@ void GetLockedFiles(const TArray<FString>& InFiles, TArray<FString>& OutFiles)
 }
 
 // Run a batch of Git "status" command to update status of given files and/or directories.
-bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, EFetchRemote FetchRemote, TMap<FString, FFriendshipperSourceControlState>& OutStates)
+bool RunUpdateStatus(const FString& InRepositoryRoot, const TArray<FString>& InFiles, EForceStatusRefresh FetchRemote, TMap<FString, FFriendshipperSourceControlState>& OutStates)
 {
 	// Remove files that aren't in the repository
 	const TArray<FString>& RepoFiles = InFiles.FilterByPredicate([InRepositoryRoot](const FString& File) { return File.StartsWith(InRepositoryRoot); });
@@ -1256,17 +1059,43 @@ bool RunUpdateStatus(const FString& InPathToGitBinary, const FString& InReposito
 	{
 		return false;
 	}
-	
+
 	FFriendshipperSourceControlModule& GitSourceControl = FFriendshipperSourceControlModule::Get();
-	FFriendshipperClient& Client = GitSourceControl.GetProvider().GetFriendshipperClient();
+	FFriendshipperSourceControlProvider& Provider = GitSourceControl.GetProvider();
+	FFriendshipperClient& Client = Provider.GetFriendshipperClient();
+
+	const FString ProjectDir = IFileManager::Get().ConvertToAbsolutePathForExternalAppForRead(*FPaths::ProjectDir());
+	const TSet<FString> AllAbsolutePaths = Provider.GetAllPathsAbsolute();
+
+	TSet<FString> AbsolutePaths;
+	for (const FString& Filename : InFiles)
+	{
+		FString AbsolutePath = FPaths::ConvertRelativePathToFull(ProjectDir, Filename);
+		AbsolutePaths.Add(MoveTemp(AbsolutePath));
+	}
 
 	FRepoStatus RepoStatus;
-	Client.GetStatus(FetchRemote, RepoStatus);
-	
-	ParseStatusResults(InPathToGitBinary, InRepositoryRoot, RepoFiles, RepoStatus, OutStates);
-	CheckRemote(InRepositoryRoot, RepoStatus, OutStates);
+	const bool bIsStatusValid = Client.GetStatus(FetchRemote, RepoStatus);
+	if (bIsStatusValid)
+	{
+		ParseFileStatusResult(AbsolutePaths, RepoStatus, OutStates);
+		CheckRemote(InRepositoryRoot, RepoStatus, OutStates);
+	}
 
-	return true;
+	return bIsStatusValid;
+}
+
+TMap<const FString, FFriendshipperState> FriendshipperStatesFromRepoStatus(const FString& InRepositoryRoot, const TSet<FString>& AllTrackedFilesAbsolutePaths, const FRepoStatus& RepoStatus)
+{
+	TMap<FString, FFriendshipperSourceControlState> SCCStates;
+
+	ParseFileStatusResult(AllTrackedFilesAbsolutePaths, RepoStatus, SCCStates);
+	CheckRemote(InRepositoryRoot, RepoStatus, SCCStates);
+
+	TMap<const FString, FFriendshipperState> States;
+	FriendshipperSourceControlUtils::CollectNewStates(SCCStates, States);
+
+	return States;
 }
 
 // Run a Git `cat-file --filters` command to dump the binary content of a revision into a file.
@@ -1674,92 +1503,25 @@ TArray<FString> AbsoluteFilenames(const TArray<FString>& InFileNames, const FStr
 
 bool UpdateCachedStates(const TMap<const FString, FFriendshipperState>& InResults)
 {
-	if (InResults.Num() == 0)
-	{
-		return false;
-	}
-	
 	FFriendshipperSourceControlModule* GitSourceControl = FFriendshipperSourceControlModule::GetThreadSafe();
 	if (!GitSourceControl)
 	{
 		return false;
 	}
 	FFriendshipperSourceControlProvider& Provider = GitSourceControl->GetProvider();
-
-	for (const auto& Pair : InResults)
-	{
-		TSharedRef<FFriendshipperSourceControlState, ESPMode::ThreadSafe> State = Provider.GetStateInternal(Pair.Key);
-		
-		// Force a status update if we've got a new file - this isn't required for all new files but it appears
-		// the source control module handles the update sequencing a bit differently for new files that are the result
-		// of a "duplicate" operation. This appears to fix cases for both new and duplicate files. 
-		const bool bForceUpdate = State->State.FileState == EFileState::Unknown && State->State.TreeState == ETreeState::NotInRepo;
-		
-		const FFriendshipperState& NewState = Pair.Value;
-		if (NewState.FileState != EFileState::Unset)
-		{
-			// Invalid transition
-			if (NewState.FileState == EFileState::Added && !State->IsUnknown() && !State->CanAdd())
-			{
-				continue;
-			}
-			
-			State->State.FileState = NewState.FileState;
-		}
-		if (NewState.TreeState != ETreeState::Unset)
-		{
-			State->State.TreeState = NewState.TreeState;
-		}
-		// If we're updating lock state, also update user
-		if (NewState.LockState != ELockState::Unset)
-		{
-			State->State.LockState = NewState.LockState;
-			State->State.LockUser = NewState.LockUser;
-		}
-		if (NewState.RemoteState != ERemoteState::Unset)
-		{
-			State->State.RemoteState = NewState.RemoteState;
-			if (NewState.RemoteState == ERemoteState::UpToDate)
-			{
-				State->State.HeadBranch = TEXT("");
-			}
-			else
-			{
-				State->State.HeadBranch = NewState.HeadBranch;
-			}
-		}
-
-		State->TimeStamp = bForceUpdate ? FDateTime::MinValue() : FDateTime::Now();
-
-		// We've just updated the state, no need for UpdateStatus to be ran for this file again.
-		Provider.AddFileToIgnoreForceCache(State->LocalFilename);
-	}
-
-	return true;
+	return Provider.UpdateCachedStates(InResults);
 }
 
-bool CollectNewStates(const TMap<FString, FFriendshipperSourceControlState>& InStates, TMap<const FString, FFriendshipperState>& OutResults)
+void CollectNewStates(const TMap<FString, FFriendshipperSourceControlState>& InStates, TMap<const FString, FFriendshipperState>& OutResults)
 {
-	if (InStates.Num() == 0)
-	{
-		return false;
-	}
-	
 	for (const auto& InState : InStates)
 	{
 		OutResults.Add(InState.Key, InState.Value.State);
 	}
-
-	return true;
 }
 
-bool CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FFriendshipperState>& OutResults, EFileState::Type FileState, ETreeState::Type TreeState, ELockState::Type LockState, ERemoteState::Type RemoteState)
+void CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FFriendshipperState>& OutResults, EFileState::Type FileState, ETreeState::Type TreeState, ELockState::Type LockState, ERemoteState::Type RemoteState)
 {
-	if (InFiles.Num() == 0)
-	{
-		return false;
-	}
-
 	FFriendshipperState NewState;
 	NewState.FileState = FileState;
 	NewState.TreeState = TreeState;
@@ -1786,8 +1548,6 @@ bool CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FFrien
 			State.RemoteState = NewState.RemoteState;
 		}
 	}
-
-	return true;
 }
 
 /**

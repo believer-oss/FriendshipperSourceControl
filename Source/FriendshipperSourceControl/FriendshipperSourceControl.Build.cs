@@ -27,6 +27,7 @@ public class FriendshipperSourceControl : ModuleRules
                 "SourceControl",
                 "SourceControlWindows",
                 "UnrealEd",
+                "DirectoryWatcher",
 
                 "FriendshipperCore",
 			}
