@@ -2,7 +2,7 @@
 
 This plugin is originally based on the Project Borealis' [UEGitPlugin Fork](https://github.com/ProjectBorealis/UEGitPlugin). It has been heavily modified to use the [Friendshipper](https://github.com/believer-oss/ethos/tree/main/friendshipper) HTTP API instead of shelling out to git directly, though some operations still remain.
 
-This means that Friendshipper _must_ be running for source control operations to work - this is a strict requirement of the plugin. See this documentation (TODO link) for more information on how Friendshipper source control works.
+This means that Friendshipper _must_ be running for source control operations to work - this is a strict requirement of the plugin. See [this documentation](https://github.com/believer-oss/ethos/blob/main/friendshipper/docs/sourcecontrol.md) for more information on how Friendshipper source control works.
 
 ## Installation
 
