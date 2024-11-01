@@ -1,4 +1,5 @@
 ﻿#include "FriendshipperClient.h"
+#include "FriendshipperSourceControlModule.h" // kOtelTracer
 
 #include "HttpManager.h"
 #include "HttpModule.h"
@@ -8,7 +9,14 @@
 #include "JsonObjectConverter.h"
 #include "Chaos/ImplicitQRSVD.h"
 #include "Dom/JsonObject.h"
+#include "Dom/JsonValue.h"
 #include "Misc/FileHelper.h"
+#include "Algo/RemoveIf.h"
+#include "Otel.h"
+#include "AnalyticsEventAttribute.h"
+#include "GenericPlatform/GenericPlatformHttp.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 
 #define LOCTEXT_NAMESPACE "FriendshipperClient"
 
@@ -57,6 +65,67 @@ static bool ProcessRequestAndWait(const TSharedRef<IHttpRequest>& Request, FFrie
 	return true;
 }
 
+template <typename T>
+static bool ParseResponse(const TSharedPtr<IHttpResponse>& Response, T* ResponseData, FOtelScopedSpan& ScopedSpan)
+{
+	OTEL_TRACER_SCOPED_LOG_HOOK(kOtelTracer, LogSourceControl, ELogVerbosity::Warning);
+
+	bool bSuccess = false;
+
+	if (Response.IsValid())
+	{
+		const int32 ResponseCode = Response->GetResponseCode();
+		const FString ResponseBody = Response->GetContentAsString();
+		if (ResponseCode == 200)
+		{
+			if (ResponseData)
+			{
+				if (FJsonObjectConverter::JsonObjectStringToUStruct<T>(ResponseBody, ResponseData, 0, 0))
+				{
+					bSuccess = true;
+				}
+				else
+				{
+					FString StructName = T::StaticStruct()->GetName();
+					UE_LOG(LogSourceControl, Error, TEXT("Error decoding response json to type %s: %s"), *StructName, *ResponseBody);
+				}
+			}
+			else
+			{
+				bSuccess = true;
+			}
+		}
+		else
+		{
+			if (ResponseBody.IsEmpty())
+			{
+				UE_LOG(LogSourceControl, Error, TEXT("Response has error code: %d"), ResponseCode);
+			}
+			else
+			{
+				UE_LOG(LogSourceControl, Error, TEXT("Response error (%d): %s"), ResponseCode, *ResponseBody);
+			}
+		}
+	}
+	else
+	{
+		UE_LOG(LogSourceControl, Error, TEXT("HTTP request failed: no response received. Is Friendshipper running?"));
+	}
+
+	if (bSuccess == false)
+	{
+		ScopedSpan.Inner().SetStatus(EOtelStatus::Error);
+	}
+
+	return bSuccess;
+}
+
+static bool ParseResponse(const TSharedPtr<IHttpResponse>& Response, FOtelScopedSpan& ScopedSpan)
+{
+	// use FUserInfo here as a dummy struct that is unused
+	return ParseResponse<FUserInfo>(Response, nullptr, ScopedSpan);
+}
+
 enum class ELockOperation
 {
 	Lock,
@@ -65,6 +134,8 @@ enum class ELockOperation
 
 static bool RequestLockOperation(TSharedRef<IHttpRequest> Request, FFriendshipperClient& Client, ELockOperation LockOperation, const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages)
 {
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
 	const TCHAR* OperationName = (LockOperation == ELockOperation::Lock) ? TEXT("lock") : TEXT("unlock");
 
 	FString Body;
@@ -78,48 +149,31 @@ static bool RequestLockOperation(TSharedRef<IHttpRequest> Request, FFriendshippe
 	}
 
 	Request->SetContentAsString(Body);
-	if (ProcessRequestAndWait(Request, Client) == false)
-	{
-		UE_LOG(LogSourceControl, Error, TEXT("Failed to process %s operation request."), OperationName);
-		return false;
-	}
 
-	if (const TSharedPtr<IHttpResponse> Response = Request->GetResponse())
+	ProcessRequestAndWait(Request, Client);
+
+	FLockResponse LockResponse;
+	if (ParseResponse(Request->GetResponse(), &LockResponse, OtelSpan))
 	{
-		const FString& ResponseBody = Response->GetContentAsString();
-		if (Response->GetResponseCode() == 200)
+		for (FLockFailure& Failure : LockResponse.Batch.Failures)
 		{
-			FLockResponse LockResponse;
-			if (FJsonObjectConverter::JsonObjectStringToUStruct(ResponseBody, &LockResponse, 0, 0))
+			if (OutFailedFiles)
 			{
-				for (FLockFailure& Failure : LockResponse.Batch.Failures)
-				{
-					if (OutFailedFiles)
-					{
-						OutFailedFiles->Emplace(MoveTemp(Failure.Path));
-					}
-
-					if (OutFailureMessages)
-					{
-						OutFailureMessages->Emplace(FString::Printf(TEXT("Failed to %s asset %s: %s"), OperationName, *Failure.Path, *Failure.Reason));
-					}
-				}
-
-				// In the future we can return true if there was a partial success
-				if (LockResponse.Batch.Failures.Num() > 0)
-				{
-					return false;
-				}
+				OutFailedFiles->Emplace(MoveTemp(Failure.Path));
 			}
-			else
+
+			FString FailMsg = FString::Printf(TEXT("Failed to %s asset %s: %s"), OperationName, *Failure.Path, *Failure.Reason);
+			OtelSpan.Inner().AddEvent(*FailMsg, {});
+			if (OutFailureMessages)
 			{
-				UE_LOG(LogSourceControl, Log, TEXT("Error decoding status for %s operation - body: %s"), OperationName, *ResponseBody);
-				// note we don't return false here because the response code is good
+				OutFailureMessages->Emplace(FailMsg);
 			}
 		}
-		else
+
+		// In the future we can return true if there was a partial success
+		if (LockResponse.Batch.Failures.Num() > 0)
 		{
-			UE_LOG(LogSourceControl, Error, TEXT("Failed to perform %s operation. EHttpErrorCode: %d. Error: %s"), OperationName, Response->GetResponseCode(), *ResponseBody);
+			OtelSpan.Inner().SetStatus(EOtelStatus::Error);
 			return false;
 		}
 	}
@@ -132,22 +186,32 @@ static bool RequestLockOperation(TSharedRef<IHttpRequest> Request, FFriendshippe
 
 FFriendshipperClient::FFriendshipperClient() = default;
 
-TSharedRef<IHttpRequest> FFriendshipperClient::CreateRequest(const FString& Path, const FString& Method) const
+TSharedRef<IHttpRequest> FFriendshipperClient::CreateRequest(const FString& Path, const FString& Method, const FOtelScopedSpan& OtelScopedSpan) const
 {
 	const FString uri = FString::Printf(TEXT("%s/%s"), *ServiceUrl, *Path);
 
 	FHttpModule& HttpModule = FHttpModule::Get();
 
 	const TSharedRef<IHttpRequest> Request = HttpModule.CreateRequest();
-	Request->SetHeader("Content-Type", TEXT("application/json"));
+	Request->SetHeader(TEXT("Content-Type"), TEXT("application/json"));
 	AddNonceHeader(Request);
 	Request->SetVerb(Method);
 
-	// Submits are potentially long operations, so we set a long timeout
 	Request->SetTimeout(300);
 	Request->SetActivityTimeout(300);
-	
+
 	Request->SetURL(uri);
+
+	// otel hooks
+	FOtelSpan OtelSpan = OtelScopedSpan.Inner();
+	const FString OtelTraceId = OtelSpan.TraceId();
+	if (OtelTraceId.IsEmpty() == false)
+	{
+		Request->SetHeader(TEXT("x-trace-id"), OtelTraceId);
+	}
+
+	auto RouteAttrib = FAnalyticsEventAttribute(TEXT("route"), FString::Printf(TEXT("%s %s"), *Method, *Path));
+	OtelSpan.AddAttribute(RouteAttrib);
 
 	return Request;
 }
@@ -166,7 +230,9 @@ void FFriendshipperClient::OnRecievedHttpStatusUpdate(const FRepoStatus& RepoSta
 
 bool FFriendshipperClient::Diff(TArray<FString>& OutResults)
 {
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/diff"), TEXT("GET"));
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
+	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/diff"), TEXT("GET"), OtelSpan);
 
 	ProcessRequestAndWait(pRequest, *this);
 
@@ -199,85 +265,63 @@ bool FFriendshipperClient::Diff(TArray<FString>& OutResults)
 
 bool FFriendshipperClient::GetUserInfo(FUserInfo& OutUserInfo)
 {
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/gh/user"), TEXT("GET"));
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
+	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/gh/user"), TEXT("GET"), OtelSpan);
 
 	ProcessRequestAndWait(pRequest, *this);
 
-	if (const TSharedPtr<IHttpResponse> Response = pRequest->GetResponse())
+	if (ParseResponse(pRequest->GetResponse(), &UserInfo, OtelSpan))
 	{
-		if (Response->GetResponseCode() != 0)
-		{
-			const FString& ResponseBody = Response->GetContentAsString();
-
-			if (!FJsonObjectConverter::JsonObjectStringToUStruct(Response->GetContentAsString(), &OutUserInfo, 0, 0))
-			{
-				UE_LOG(LogSourceControl, Log, TEXT("Error decoding Status - body: %s"), *ResponseBody)
-			}
-		}
-	}
-	else
-	{
-		UE_LOG(LogSourceControl, Error, TEXT("HTTP request failed."))
-		return false;
+		OutUserInfo = UserInfo;
+		return true;
 	}
 
-	return true;
+	return false;
 }
 
 bool FFriendshipperClient::GetStatus(EForceStatusRefresh ForceRefresh, FRepoStatus& OutStatus)
 {
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
 	bool bIsSet = false;
 	{
 		FReadScopeLock Lock = FReadScopeLock(LastRepoStatusLock);
 		bIsSet = LastRepoStatus.IsSet();
 	}
 
+	bool bSuccess = true;
 	if ((bIsSet == false) || (ForceRefresh == EForceStatusRefresh::True))
 	{
-		const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/status?skipDllCheck=true&skipEngineUpdate=true"), TEXT("GET"));
+		const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/status?skipDllCheck=true&skipEngineUpdate=true"), TEXT("GET"), OtelSpan);
 
 		ProcessRequestAndWait(pRequest, *this);
 
-		if (const TSharedPtr<IHttpResponse> Response = pRequest->GetResponse())
+		FRepoStatus TempStatus;
+		if (ParseResponse(pRequest->GetResponse(), &TempStatus, OtelSpan))
 		{
-			if (Response->GetResponseCode() != 0)
-			{
-				const FString& ResponseBody = Response->GetContentAsString();
-
-				FRepoStatus TempStatus;
-				if (FJsonObjectConverter::JsonObjectStringToUStruct(Response->GetContentAsString(), &TempStatus, 0, 0))
-				{
-					FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
-					LastRepoStatus = TempStatus;
-				}
-				else
-				{
-					UE_LOG(LogSourceControl, Log, TEXT("GetStatus: Error decoding json: %s"), *ResponseBody);
-					return false;
-				}
-			}
-			else
-			{
-				UE_LOG(LogSourceControl, Log, TEXT("GetStatus returned response error code: %d"), Response->GetResponseCode());
-				return false;
-			}
+			FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
+			LastRepoStatus = TempStatus;
 		}
 		else
 		{
-			UE_LOG(LogSourceControl, Error, TEXT("HTTP request failed."))
-			FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
-			LastRepoStatus.Reset();
-			return false;
+			bSuccess = false;
 		}
 	}
 
-	FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
-	OutStatus = *LastRepoStatus;
-	return true;
+	FReadScopeLock Lock = FReadScopeLock(LastRepoStatusLock);
+	if (LastRepoStatus.IsSet())
+	{
+		OutStatus = *LastRepoStatus;
+	}
+
+	return bSuccess;
 }
 
 bool FFriendshipperClient::Submit(const FString& InCommitMsg, const TArray<FString>& InFiles)
 {
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
 	FString Body;
 	{
 		const TSharedPtr<FJsonObject> JsonObject = MakeShareable<>(new FJsonObject());
@@ -294,36 +338,18 @@ bool FFriendshipperClient::Submit(const FString& InCommitMsg, const TArray<FStri
 		FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
 	}
 
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/gh/submit"), TEXT("POST"));
+	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/gh/submit"), TEXT("POST"), OtelSpan);
 	pRequest->SetContentAsString(Body);
 
 	ProcessRequestAndWait(pRequest, *this);
 
-	if (const TSharedPtr<IHttpResponse> Response = pRequest->GetResponse())
-	{
-		if (Response->GetResponseCode() == 200)
-		{
-			UE_LOG(LogSourceControl, Log, TEXT("Successfully submitted content."));
-		}
-		else
-		{
-			const FString& ResponseBody = Response->GetContentAsString();
-			UE_LOG(LogSourceControl, Error, TEXT("Failed to submit content. EHttpErrorCode: %d. Error: %s"), Response->GetResponseCode(), *ResponseBody);
-			return false;
-		}
-	}
-	else
-	{
-		UE_LOG(LogSourceControl, Error, TEXT("Submit: HTTP request failed."));
-
-		return false;
-	}
-
-	return true;
+	return ParseResponse(pRequest->GetResponse(), OtelSpan);
 }
 
 bool FFriendshipperClient::Revert(const TArray<FString>& InFiles)
 {
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
 	FString Body;
 	{
 		FRevertRequest Request;
@@ -334,48 +360,94 @@ bool FFriendshipperClient::Revert(const TArray<FString>& InFiles)
 		ensure(bSuccess);
 	}
 
-	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/revert"), TEXT("POST"));
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/revert"), TEXT("POST"), OtelSpan);
 	Request->SetContentAsString(Body);
 
 	ProcessRequestAndWait(Request, *this);
 
-	if (const TSharedPtr<IHttpResponse> Response = Request->GetResponse())
-	{
-		if (Response->GetResponseCode() == 200)
-		{
-			UE_LOG(LogSourceControl, Log, TEXT("Successfully reverted files."));
-		}
-		else
-		{
-			const FString& ResponseBody = Response->GetContentAsString();
-			UE_LOG(LogSourceControl, Error, TEXT("Failed to revert files. EHttpErrorCode: %d. Error: %s"), Response->GetResponseCode(), *ResponseBody);
-			return false;
-		}
-	}
-	else
-	{
-		UE_LOG(LogSourceControl, Error, TEXT("Revert: HTTP request failed."));
-		return false;
-	}
-
-	return true;
+	return ParseResponse(Request->GetResponse(), OtelSpan);
 }
 
 bool FFriendshipperClient::LockFiles(const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages)
 {
-	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/locks/lock"), TEXT("POST"));
-	return RequestLockOperation(Request, *this, ELockOperation::Lock, InFiles, OutFailedFiles, OutFailureMessages);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
+	check(OutFailedFiles);
+
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/locks/lock"), TEXT("POST"), OtelSpan);
+	bool bSuccess = RequestLockOperation(Request, *this, ELockOperation::Lock, InFiles, OutFailedFiles, OutFailureMessages);
+
+	FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
+
+	if (LastRepoStatus.IsSet())
+	{
+		for (const FString& File : InFiles)
+		{
+			if (OutFailedFiles->Contains(File) == false)
+			{
+				FLfsLock LfsLock;
+				LfsLock.Path = File;
+				LfsLock.Owner.Name = UserInfo.Username;
+				LastRepoStatus->LocksOurs.Add(LfsLock);
+			}
+		}
+	}
+
+	return bSuccess;
 }
 
 bool FFriendshipperClient::UnlockFiles(const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages)
 {
-	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/locks/unlock"), TEXT("POST"));
-	return RequestLockOperation(Request, *this, ELockOperation::Unlock, InFiles, OutFailedFiles, OutFailureMessages);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
+	check(OutFailedFiles);
+
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/locks/unlock"), TEXT("POST"), OtelSpan);
+	bool bSuccess = RequestLockOperation(Request, *this, ELockOperation::Unlock, InFiles, OutFailedFiles, OutFailureMessages);
+
+	FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
+
+	if (LastRepoStatus.IsSet())
+	{
+		int Num = Algo::StableRemoveIf(LastRepoStatus->LocksOurs, [&InFiles, OutFailedFiles](const FLfsLock& Lock)
+			{
+				return InFiles.Contains(Lock.Path) && (OutFailedFiles->Contains(Lock.Path) == false);
+			});
+		LastRepoStatus->LocksOurs.SetNum(Num);
+	}
+
+	return bSuccess;
+}
+
+bool FFriendshipperClient::GetFileHistory(const FString& Path, FFileHistoryResponse& OutResults)
+{
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
+	// format path as urlencoded query param
+	FString EncodedPath = FGenericPlatformHttp::UrlEncode(Path);
+	FString HistoryPath = FString::Printf(TEXT("repo/file-history?path=%s"), *EncodedPath);
+
+	const TSharedRef<IHttpRequest> pRequest = CreateRequest(*HistoryPath, TEXT("GET"), OtelSpan);
+
+	ProcessRequestAndWait(pRequest, *this);
+
+	// parse response
+	FFileHistoryResponse HistoryResponse;
+	if (ParseResponse(pRequest->GetResponse(), &HistoryResponse, OtelSpan))
+	{
+		// convert to source control revisions
+		OutResults = MoveTemp(HistoryResponse);
+		return true;
+	}
+
+	return false;
 }
 
 bool FFriendshipperClient::CheckSystemStatus()
 {
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("system/status"), TEXT("GET"));
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
+	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("system/status"), TEXT("GET"), OtelSpan);
 
 	ProcessRequestAndWait(pRequest, *this);
 
@@ -385,6 +457,129 @@ bool FFriendshipperClient::CheckSystemStatus()
 	}
 
 	return false;
+}
+
+bool FFriendshipperClient::UploadFile(const FString& Path, const FString& Prefix, const FSimpleDelegate& OnComplete)
+{
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
+	FString Body;
+	{
+		FStorageUploadRequest Request;
+		Request.Path = Path;
+		Request.Prefix = Prefix;
+
+		bool bSuccess = FJsonObjectConverter::UStructToJsonObjectString(Request, Body);
+		ensure(bSuccess);
+	}
+
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("storage/upload"), TEXT("POST"), OtelSpan);
+	Request->SetContentAsString(Body);
+
+	bool bSuccess = ProcessRequestAndWait(Request, *this);
+
+	OnComplete.ExecuteIfBound();
+
+	return bSuccess;
+}
+
+bool FFriendshipperClient::DownloadFile(const FString& Path, const FString& Key, const FSimpleDelegate& OnComplete)
+{
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
+	FString Body;
+	{
+		FStorageDownloadRequest Request;
+		Request.Path = Path;
+		Request.Key = Key;
+
+		bool bSuccess = FJsonObjectConverter::UStructToJsonObjectString(Request, Body);
+		ensure(bSuccess);
+	}
+
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("storage/download"), TEXT("POST"), OtelSpan);
+	Request->SetContentAsString(Body);
+
+	bool bSuccess = ProcessRequestAndWait(Request, *this);
+
+	OnComplete.ExecuteIfBound();
+
+	return bSuccess;
+}
+
+bool FFriendshipperClient::ListModelNames(const FString& Prefix, const TDelegate<void(TArray<FString>)>& OnComplete)
+{
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+
+	FString Body;
+	{
+		FStorageListRequest Request;
+		Request.Prefix = Prefix;
+
+		bool bSuccess = FJsonObjectConverter::UStructToJsonObjectString(Request, Body);
+		ensure(bSuccess);
+	}
+
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("storage/list"), TEXT("POST"), OtelSpan);
+	Request->SetContentAsString(Body);
+
+	Request->OnProcessRequestComplete() = FHttpRequestCompleteDelegate::CreateLambda([OnComplete](FHttpRequestPtr Request, FHttpResponsePtr Response, bool bConnectedSuccessfully)
+		{
+			TArray<FString> ModelNames;
+			if (bConnectedSuccessfully)
+			{
+				if (Response)
+				{
+					const int ResponseCode = Response->GetResponseCode();
+					if (ResponseCode == EHttpResponseCodes::Ok)
+					{
+						FString ResponseBody = Response->GetContentAsString();
+						TSharedRef<TJsonReader<>> JsonReader = TJsonReaderFactory<>::Create(ResponseBody);
+						TArray<TSharedPtr<FJsonValue>> JsonModelPaths;
+
+						if (FJsonSerializer::Deserialize(JsonReader, JsonModelPaths))
+						{
+							for (TSharedPtr<FJsonValue> Value : JsonModelPaths)
+							{
+								if (Value->Type == EJson::String)
+								{
+									// if the component after "models" is a folder, then add the folder name to ModelNames
+									FString Path = Value->AsString();
+									TArray<FString> Components;
+									Path.ParseIntoArray(Components, TEXT("/"), true);
+									int32 ModelsIndex = Components.Find(TEXT("models"));
+
+									if (ModelsIndex != INDEX_NONE && Components.IsValidIndex(ModelsIndex + 1))
+									{
+										FString ModelName = Components[ModelsIndex + 1];
+										if (!ModelName.Contains(TEXT(".")) && !ModelNames.Contains(ModelName))
+										{
+											ModelNames.Add(ModelName);
+										}
+									}
+								}
+							}
+						}
+					}
+					else
+					{
+						UE_LOG(LogSourceControl, Error, TEXT("Failed to fetch model objects"));
+					}
+				}
+				else
+				{
+					UE_LOG(LogSourceControl, Error, TEXT("Unable to get response from S3. Was the request unable to be sent?"));
+				}
+			}
+			else
+			{
+				UE_LOG(LogSourceControl, Error, TEXT("Failed to connect to remote endpoint"));
+			}
+
+			OnComplete.Execute(MoveTemp(ModelNames));
+		});
+
+	return Request->ProcessRequest();
 }
 
 void FFriendshipperClient::Init(const FString& Url)
@@ -412,7 +607,8 @@ void FFriendshipperClient::RefreshNonce()
 		LegacyPath.Append("Fellowshipper/data/.nonce");
 
 		// compatibility for older versions of Friendshipper
-		if (FFileHelper::LoadFileToString(NonceKey, LegacyPath.ToString())) {
+		if (FFileHelper::LoadFileToString(NonceKey, LegacyPath.ToString()))
+		{
 			UE_LOG(LogSourceControl, Warning, TEXT("Failed to read Friendshipper nonce key from path '%s'. Source control operations will fail."), Path.ToString());
 		}
 	}
@@ -420,14 +616,13 @@ void FFriendshipperClient::RefreshNonce()
 
 void FFriendshipperClient::PromptConflicts(TArray<FString>& Files)
 {
-	FText Message(LOCTEXT("Friendshipper_IsSvcRunning_Msg", "Source control process timed out. Is Friendshipper running?\n\n"
-																"If so, and the problem persists contact #ask-git."));
+	FText Message(LOCTEXT("Friendshipper_IsSvcRunning_Msg", "Source control process timed out. Is Friendshipper running?"));
 
 	for (const FString& File : Files)
 	{
 		Message = FText::Format(LOCTEXT("Friendshipper_Conflict_Format", "{0}\n{1}"), Message, FText::FromString(File));
 	}
-	
+
 	FMessageDialog::Open(EAppMsgType::Ok, Message);
 }
 

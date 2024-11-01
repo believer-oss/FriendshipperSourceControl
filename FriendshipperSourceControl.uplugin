@@ -22,6 +22,12 @@
 			"Name": "FriendshipperSourceControl",
 			"Type": "EditorNoCommandlet",
 			"LoadingPhase": "Default"
+		},
+	],
+	"Plugins": [
+		{
+			"Name": "OpenTelemetry",
+			"Enabled": true
 		}
 	]
 }

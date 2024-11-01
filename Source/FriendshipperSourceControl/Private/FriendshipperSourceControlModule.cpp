@@ -36,6 +36,8 @@
 
 TArray<FString> FFriendshipperSourceControlModule::EmptyStringArray;
 
+const FName kOtelTracer = FName(TEXT("FriendshipperSourceControl"));
+
 template <typename Type>
 static TSharedRef<IFriendshipperSourceControlWorker, ESPMode::ThreadSafe> CreateWorker()
 {
@@ -472,6 +474,22 @@ bool FFriendshipperSourceControlModule::RevertAndReloadPackages(const TArray<FSt
 
 	return ApplyOperationAndReloadPackages(InFilenames, RevertOperation);
 }
+
+void FFriendshipperSourceControlModule::UploadFile(const FString& Path, const FString& Prefix, const FSimpleDelegate& OnComplete)
+{
+	FriendshipperSourceControlProvider.GetFriendshipperClient().UploadFile(Path, Prefix, OnComplete);
+}
+
+void FFriendshipperSourceControlModule::DownloadFile(const FString& Path, const FString& Key, const FSimpleDelegate& OnComplete)
+{
+	FriendshipperSourceControlProvider.GetFriendshipperClient().DownloadFile(Path, Key, OnComplete);
+}
+
+void FFriendshipperSourceControlModule::ListModelNames(const FString& Prefix, const TDelegate<void(TArray<FString>)>& OnComplete)
+{
+	FriendshipperSourceControlProvider.GetFriendshipperClient().ListModelNames(Prefix, OnComplete);
+}
+
 IMPLEMENT_MODULE(FFriendshipperSourceControlModule, FriendshipperSourceControl);
 
 #undef LOCTEXT_NAMESPACE

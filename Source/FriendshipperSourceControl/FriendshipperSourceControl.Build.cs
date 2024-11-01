@@ -29,6 +29,8 @@ public class FriendshipperSourceControl : ModuleRules
                 "UnrealEd",
                 "DirectoryWatcher",
 
+                "OpenTelemetry",
+
                 "FriendshipperCore",
 			}
 		);

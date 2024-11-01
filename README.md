@@ -20,6 +20,8 @@ Copy the entire repo (without the .git directory) into your project's `Plugins/`
 }
 ```
 
+**Note**: This plugin has a dependency on UnrealOpenTelemetry, which is published [here](https://github.com/believer-oss/UnrealOpenTelemetry).
+
 ### Note about .gitattributes and .gitignore
 
 This plugin requires explicit file attributes for `*.umap` and `*.uasset`, rather than other approaches of using wildcards for the content folder (`Content/**`).
@@ -84,5 +86,4 @@ To connect Unreal to Friendshipper, select the `Connect to Revision Control` opt
 
 ### Submitting changes:
 
-`Submit Content` leverages the Friendshipper Quick Submit flow, which allows users to submit changes without having latest changes. This unlocks critical workflow needs for users in larger studios, where lots of changes are being merged 
-
+`Submit Content` leverages the Friendshipper Quick Submit flow, which allows users to submit changes without having latest changes. This unlocks critical workflow needs for users in larger studios, where lots of changes are being merged

@@ -4,6 +4,8 @@
 // or copy at http://opensource.org/licenses/MIT)
 
 #include "FriendshipperSourceControlOperations.h"
+#include "FriendshipperClient.h"
+#include "Otel.h"
 
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
@@ -20,11 +22,9 @@
 #include "HAL/PlatformFileManager.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
+#include "UObject/PackageTrailer.h"
 
 #include <thread>
-
-#include "FriendshipperClient.h"
-#include "UObject/PackageTrailer.h"
 
 #define LOCTEXT_NAMESPACE "GitSourceControl"
 
@@ -83,14 +83,29 @@ static bool LockFiles(const FString& PathToGitRoot, const TArray<FString>& Files
 	return bSuccess;
 }
 
-
 FName FFriendshipperConnectWorker::GetName() const
 {
 	return "Connect";
 }
 
+static void CollectCommandErrors(FOtelScopedSpan& ScopedSpan, FFriendshipperSourceControlCommand& Command)
+{
+	FOtelSpan Span = ScopedSpan.Inner();
+	for (const FString& Error : Command.ResultInfo.ErrorMessages)
+	{
+		Span.SetStatus(EOtelStatus::Error);
+		Span.AddEvent(*Error, {});
+	}
+}
+
 bool FFriendshipperConnectWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	// The connect worker checks if we are connected to the remote server.
 	check(InCommand.Operation->GetName() == GetName());
 	TSharedRef<FConnect, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FConnect>(InCommand.Operation);
@@ -126,7 +141,6 @@ bool FFriendshipperConnectWorker::Execute(FFriendshipperSourceControlCommand& In
 		return false;
 	}
 
-	// TODO: always return true, and enter an offline mode if could not connect to remote
 	return true;
 }
 
@@ -142,6 +156,12 @@ FName FFriendshipperCheckOutWorker::GetName() const
 
 bool FFriendshipperCheckOutWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	return LockFiles(InCommand.PathToGitRoot, InCommand.Files, States, &InCommand.ResultInfo.ErrorMessages);
@@ -171,6 +191,12 @@ const FText EmptyCommitMsg;
 
 bool FFriendshipperCheckInWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	TSharedRef<FCheckIn, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FCheckIn>(InCommand.Operation);
@@ -227,6 +253,12 @@ FName FFriendshipperMarkForAddWorker::GetName() const
 
 bool FFriendshipperMarkForAddWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	// If we have nothing to process, exit immediately
@@ -250,6 +282,12 @@ FName FFriendshipperDeleteWorker::GetName() const
 
 bool FFriendshipperDeleteWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	// If we have nothing to process, exit immediately
 	if (InCommand.Files.Num() == 0)
 	{
@@ -295,6 +333,12 @@ FName FFriendshipperRevertWorker::GetName() const
 
 bool FFriendshipperRevertWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	bool bSuccess = true;
 
 	FFriendshipperSourceControlModule& GitSourceControl = FFriendshipperSourceControlModule::Get();
@@ -341,6 +385,12 @@ FName FFriendshipperFetchWorker::GetName() const
 
 bool FFriendshipperFetchWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	check(InCommand.Operation->GetName() == GetName());
 	TSharedRef<FFriendshipperFetch, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FFriendshipperFetch>(InCommand.Operation);
 
@@ -356,6 +406,8 @@ bool FFriendshipperFetchWorker::Execute(FFriendshipperSourceControlCommand& InCo
 			TSet<FString> AllFiles = Provider.GetAllPathsAbsolute();
 			States = FriendshipperSourceControlUtils::FriendshipperStatesFromRepoStatus(InCommand.PathToRepositoryRoot, AllFiles, RepoStatus);
 		}
+
+		Provider.RunFileRescanTask();
 	}
 
 	return bSuccess;
@@ -373,12 +425,18 @@ FName FFriendshipperUpdateStatusWorker::GetName() const
 
 bool FFriendshipperUpdateStatusWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	TSharedRef<FUpdateStatus, ESPMode::ThreadSafe> Operation = StaticCastSharedRef<FUpdateStatus>(InCommand.Operation);
 
 	bool bSuccess = true;
-	if(InCommand.Files.Num() > 0)
+	if (InCommand.Files.Num() > 0)
 	{
 		TMap<FString, FFriendshipperSourceControlState> UpdatedStates;
 		bSuccess = FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToRepositoryRoot, InCommand.Files, EForceStatusRefresh::False, UpdatedStates);
@@ -397,11 +455,11 @@ bool FFriendshipperUpdateStatusWorker::Execute(FFriendshipperSourceControlComman
 					{
 						// In case of a merge conflict, we first need to get the tip of the "remote branch" (MERGE_HEAD)
 						FriendshipperSourceControlUtils::RunGetHistory(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, File, true,
-															 InCommand.ResultInfo.ErrorMessages, History);
+							InCommand.ResultInfo.ErrorMessages, History);
 					}
 					// Get the history of the file in the current branch
 					bSuccess &= FriendshipperSourceControlUtils::RunGetHistory(InCommand.PathToGitBinary, InCommand.PathToRepositoryRoot, File, false,
-																						 InCommand.ResultInfo.ErrorMessages, History);
+						InCommand.ResultInfo.ErrorMessages, History);
 					Histories.Add(*File, History);
 				}
 			}
@@ -410,8 +468,8 @@ bool FFriendshipperUpdateStatusWorker::Execute(FFriendshipperSourceControlComman
 	else
 	{
 		// no path provided: only update the status of assets in Content/ directory and also Config files
-		const TArray<FString> ProjectDirs {FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()), FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
-										   FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath())};
+		const TArray<FString> ProjectDirs{ FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()), FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
+			FPaths::ConvertRelativePathToFull(FPaths::GetProjectFilePath()) };
 		TMap<FString, FFriendshipperSourceControlState> UpdatedStates;
 		bSuccess = FriendshipperSourceControlUtils::RunUpdateStatus(InCommand.PathToRepositoryRoot, ProjectDirs, EForceStatusRefresh::False, UpdatedStates);
 		FriendshipperSourceControlUtils::RemoveRedundantErrors(InCommand, TEXT("' is outside repository"));
@@ -432,11 +490,11 @@ bool FFriendshipperUpdateStatusWorker::UpdateStates() const
 {
 	bool bUpdated = FriendshipperSourceControlUtils::UpdateCachedStates(States);
 
-	FFriendshipperSourceControlModule& GitSourceControl = FModuleManager::GetModuleChecked<FFriendshipperSourceControlModule>( "FriendshipperSourceControl" );
+	FFriendshipperSourceControlModule& GitSourceControl = FModuleManager::GetModuleChecked<FFriendshipperSourceControlModule>("FriendshipperSourceControl");
 	FFriendshipperSourceControlProvider& Provider = GitSourceControl.GetProvider();
 
 	// add history, if any
-	for(const auto& History : Histories)
+	for (const auto& History : Histories)
 	{
 		TSharedRef<FFriendshipperSourceControlState, ESPMode::ThreadSafe> State = Provider.GetStateInternal(History.Key);
 		State->History = History.Value;
@@ -454,6 +512,12 @@ FName FFriendshipperCopyWorker::GetName() const
 
 bool FFriendshipperCopyWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	bool bSuccess = true;
@@ -479,8 +543,14 @@ FName FFriendshipperResolveWorker::GetName() const
 	return "Resolve";
 }
 
-bool FFriendshipperResolveWorker::Execute( class FFriendshipperSourceControlCommand& InCommand )
+bool FFriendshipperResolveWorker::Execute(class FFriendshipperSourceControlCommand& InCommand)
 {
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	ON_SCOPE_EXIT
+	{
+		CollectCommandErrors(OtelScopedSpan, InCommand);
+	};
+
 	check(InCommand.Operation->GetName() == GetName());
 
 	// mark the conflicting files as resolved:

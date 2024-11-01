@@ -168,8 +168,7 @@ void FFriendshipperSourceControlProvider::CheckRepositoryStatus()
 				{
 					if (IDirectoryWatcher* Watcher = Module->Get())
 					{
-						const FString Directories[] =
-						{
+						const FString Directories[] = {
 							FPaths::ProjectConfigDir(),
 							FPaths::ProjectContentDir(),
 						};
@@ -178,8 +177,11 @@ void FFriendshipperSourceControlProvider::CheckRepositoryStatus()
 
 						for (const FString& Dir : Directories)
 						{
+							FString StandardizedDir = FPaths::CreateStandardFilename(Dir);
 							FFriendshipperFileWatchHandle Handle;
-							Watcher->RegisterDirectoryChangedCallback_Handle(Dir, Delegate, Handle.DelegateHandle);
+							Handle.Directory = StandardizedDir;
+							Watcher->RegisterDirectoryChangedCallback_Handle(StandardizedDir, Delegate, Handle.DelegateHandle);
+							FileWatchHandles.Add(Handle);
 						}
 					}
 				}
@@ -487,7 +489,7 @@ void FFriendshipperSourceControlProvider::CancelOperation(const FSourceControlOp
 
 bool FFriendshipperSourceControlProvider::UsesLocalReadOnlyState() const
 {
-	return true;
+	return false;
 }
 
 bool FFriendshipperSourceControlProvider::UsesChangelists() const
@@ -970,40 +972,39 @@ void FFriendshipperSourceControlProvider::RunFileRescanTask()
 	const FString RepoRoot = PathToRepositoryRoot;
 
 	auto RescanTaskFunc = [GitBinaryPath, RepoRoot]()
-		{
-			const TArray<FString> ProjectDirs
-			{
-				FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
-				FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
-			};
-
-			TUniquePtr<TSet<FString>> AllFiles = MakeUnique<TSet<FString>>();
-			for (const FString& DirPath : ProjectDirs)
-			{
-				TArray<FString> Files;
-				FriendshipperSourceControlUtils::ListFilesInDirectoryRecurse(GitBinaryPath, RepoRoot, DirPath, Files);
-				AllFiles->Append(MoveTemp(Files));
-			}
-
-			if (AllFiles->Num() > 0)
-			{
-				AsyncTask(ENamedThreads::GameThread, [Files = std::move(AllFiles)]()
-					{
-						if (FFriendshipperSourceControlModule* SCC = FFriendshipperSourceControlModule::GetThreadSafe())
-						{
-							FFriendshipperSourceControlProvider& Provider = SCC->GetProvider();
-
-							{
-								auto Lock = FWriteScopeLock(Provider.AllPathsAbsoluteLock);
-								Provider.AllPathsAbsolute = MoveTemp(*Files);
-							}
-
-							Provider.bAllPathsScanInProgress = false;
-							Provider.RefreshCacheFromSavedState();
-						}
-					});
-			}
+	{
+		const TArray<FString> ProjectDirs{
+			FPaths::ConvertRelativePathToFull(FPaths::ProjectContentDir()),
+			FPaths::ConvertRelativePathToFull(FPaths::ProjectConfigDir()),
 		};
+
+		TUniquePtr<TSet<FString>> AllFiles = MakeUnique<TSet<FString>>();
+		for (const FString& DirPath : ProjectDirs)
+		{
+			TArray<FString> Files;
+			FriendshipperSourceControlUtils::ListFilesInDirectoryRecurse(GitBinaryPath, RepoRoot, DirPath, Files);
+			AllFiles->Append(MoveTemp(Files));
+		}
+
+		if (AllFiles->Num() > 0)
+		{
+			AsyncTask(ENamedThreads::GameThread, [Files = std::move(AllFiles)]()
+				{
+					if (FFriendshipperSourceControlModule* SCC = FFriendshipperSourceControlModule::GetThreadSafe())
+					{
+						FFriendshipperSourceControlProvider& Provider = SCC->GetProvider();
+
+						{
+							auto Lock = FWriteScopeLock(Provider.AllPathsAbsoluteLock);
+							Provider.AllPathsAbsolute = MoveTemp(*Files);
+						}
+
+						Provider.bAllPathsScanInProgress = false;
+						Provider.RefreshCacheFromSavedState();
+					}
+				});
+		}
+	};
 
 	if (IsInGameThread())
 	{
@@ -1031,11 +1032,10 @@ void FFriendshipperSourceControlProvider::OnFilesChanged(const TArray<struct FFi
 	bool bNeedsRescan = false;
 	for (const FFileChangeData& Change : FileChanges)
 	{
-		if (Change.Action == FFileChangeData::FCA_Added ||
-			Change.Action == FFileChangeData::FCA_Removed ||
-			Change.Action == FFileChangeData::FCA_RescanRequired) {
-				bNeedsRescan = true;
-				break;
+		if (Change.Action == FFileChangeData::FCA_Added || Change.Action == FFileChangeData::FCA_Removed || Change.Action == FFileChangeData::FCA_RescanRequired)
+		{
+			bNeedsRescan = true;
+			break;
 		}
 	}
 

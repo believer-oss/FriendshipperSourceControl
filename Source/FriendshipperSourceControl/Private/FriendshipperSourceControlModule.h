@@ -15,6 +15,8 @@
 struct FAssetData;
 class FExtender;
 
+extern const FName kOtelTracer;
+
 class FFriendshipperSourceControlModule : public IModuleInterface
 {
 public:
@@ -79,6 +81,9 @@ public:
 	static void SetLastErrors(const TArray<FText>& InErrors);
 
 	static void RevertIndividualFiles(const TArray<FString>& PackageNames);
+	void UploadFile(const FString& Path, const FString& Prefix, const FSimpleDelegate& OnComplete);
+	void DownloadFile(const FString& Path, const FString& Key, const FSimpleDelegate& OnComplete);
+	void ListModelNames(const FString& Prefix, const TDelegate<void(TArray<FString>)>& OnComplete);
 
 private:
 	static TSharedRef<FExtender> OnExtendContentBrowserAssetSelectionMenu(const TArray<FAssetData>& SelectedAssets);

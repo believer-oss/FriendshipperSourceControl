@@ -154,6 +154,10 @@ bool RunCommandInternalRaw(const FString& InCommand, const FString& InPathToGitB
 		FullCommand += RepositoryRoot;
 		FullCommand += TEXT("\" ");
 	}
+
+	// Needed to avoid some cases where git logs on individual files can hang for a long time
+	LogableCommand += TEXT("--no-pager ");
+
 	// then the git command itself ("status", "log", "commit"...)
 	LogableCommand += InCommand;
 
@@ -1388,80 +1392,46 @@ static void ParseLogResults(const TArray<FString>& InResults, TGitSourceControlH
 	}
 }
 
-/**
- * Extract the SHA1 identifier and size of a blob (file) from a Git "ls-tree" command.
- *
- * Example output for the command git ls-tree --long 7fdaeb2 Content/Blueprints/BP_Test.uasset
-100644 blob a14347dc3b589b78fb19ba62a7e3982f343718bc   70731	Content/Blueprints/BP_Test.uasset
-*/
-class FFriendshipperLsTreeParser
-{
-public:
-	/** Parse the unmerge status: extract the base SHA1 identifier of the file */
-	FFriendshipperLsTreeParser(const TArray<FString>& InResults)
-	{
-		const FString& FirstResult = InResults[0];
-		FileHash = FirstResult.Mid(12, 40);
-		int32 IdxTab;
-		if (FirstResult.FindChar('\t', IdxTab))
-		{
-			const FString SizeString = FirstResult.Mid(53, IdxTab - 53);
-			FileSize = FCString::Atoi(*SizeString);
-		}
-	}
-
-	FString FileHash; ///< SHA1 Id of the file (warning: not the commit Id)
-	int32 FileSize; ///< Size of the file (in bytes)
-};
-
 // Run a Git "log" command and parse it.
 bool RunGetHistory(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const FString& InFile, bool bMergeConflict,
 				   TArray<FString>& OutErrorMessages, TGitSourceControlHistory& OutHistory)
 {
 	bool bResults;
+
+	FFriendshipperSourceControlModule& GitSourceControl = FFriendshipperSourceControlModule::Get();
+	FFriendshipperSourceControlProvider& Provider = GitSourceControl.GetProvider();
+	FFriendshipperClient& Client = Provider.GetFriendshipperClient();
+
+	FFileHistoryResponse FileHistory;
+	bResults = Client.GetFileHistory(InFile, FileHistory);
+
+	// convert to the format expected by the Editor UI
+	for (const auto& Revision : FileHistory.Revisions)
 	{
-		TArray<FString> Results;
-		TArray<FString> Parameters;
-		Parameters.Add(TEXT("--follow")); // follow file renames
-		Parameters.Add(TEXT("--date=raw"));
-		Parameters.Add(TEXT("--name-status")); // relative filename at this revision, preceded by a status character
-		Parameters.Add(TEXT("--pretty=medium")); // make sure format matches expected in ParseLogResults
-		if (bMergeConflict)
-		{
-			// In case of a merge conflict, we also need to get the tip of the "remote branch" (MERGE_HEAD) before the log of the "current branch" (HEAD)
-			// @todo does not work for a cherry-pick! Test for a rebase.
-			Parameters.Add(TEXT("MERGE_HEAD"));
-			Parameters.Add(TEXT("--max-count 1"));
-		}
-		else
-		{
-			Parameters.Add(TEXT("--max-count 250")); // Increase default count to 250 from 100
-		}
-		TArray<FString> Files;
-		Files.Add(*InFile);
-		bResults = RunCommand(TEXT("log"), InPathToGitBinary, InRepositoryRoot, Parameters, Files, Results, OutErrorMessages);
-		if (bResults)
-		{
-			ParseLogResults(Results, OutHistory);
-		}
+		TSharedRef<FFriendshipperSourceControlRevision, ESPMode::ThreadSafe> SourceControlRevision = MakeShareable(new FFriendshipperSourceControlRevision);
+		SourceControlRevision->CommitId = Revision.CommitId;
+		SourceControlRevision->ShortCommitId = Revision.ShortCommitId;
+		SourceControlRevision->CommitIdNumber = Revision.CommitIdNumber;
+		SourceControlRevision->RevisionNumber = Revision.RevisionNumber;
+		SourceControlRevision->UserName = Revision.UserName;
+		SourceControlRevision->Date = Revision.Date;
+		SourceControlRevision->Description = Revision.Description;
+		SourceControlRevision->Action = Revision.Action;
+		SourceControlRevision->Filename = Revision.Filename;
+		SourceControlRevision->FileSize = Revision.FileSize;
+		SourceControlRevision->PathToRepoRoot = InRepositoryRoot;
+
+		OutHistory.Add(MoveTemp(SourceControlRevision));
 	}
-	for (auto& Revision : OutHistory)
+
+	for (int32 RevisionIndex = 0; RevisionIndex < OutHistory.Num(); RevisionIndex++)
 	{
-		// Get file (blob) sha1 id and size
-		TArray<FString> Results;
-		TArray<FString> Parameters;
-		Parameters.Add(TEXT("--long")); // Show object size of blob (file) entries.
-		Parameters.Add(Revision->GetRevision());
-		TArray<FString> Files;
-		Files.Add(*Revision->GetFilename());
-		bResults &= RunCommand(TEXT("ls-tree"), InPathToGitBinary, InRepositoryRoot, Parameters, Files, Results, OutErrorMessages);
-		if (bResults && Results.Num())
+		const auto& SourceControlRevisionItem = OutHistory[RevisionIndex];
+		// Special case of a move ("branch" in Perforce term): point to the previous change (so the next one in the order of the log)
+		if ((SourceControlRevisionItem->Action == "branch") && (RevisionIndex + 1) < OutHistory.Num())
 		{
-			FFriendshipperLsTreeParser LsTree(Results);
-			Revision->FileHash = LsTree.FileHash;
-			Revision->FileSize = LsTree.FileSize;
+			SourceControlRevisionItem->BranchSource = OutHistory[RevisionIndex + 1];
 		}
-		Revision->PathToRepoRoot = InRepositoryRoot;
 	}
 
 	return bResults;
