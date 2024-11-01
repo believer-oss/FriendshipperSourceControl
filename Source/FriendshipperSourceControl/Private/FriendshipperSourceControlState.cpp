@@ -4,6 +4,7 @@
 // or copy at http://opensource.org/licenses/MIT)
 
 #include "FriendshipperSourceControlState.h"
+#include "FriendshipperSourceControlUtils.h"
 
 #include "Textures/SlateIcon.h"
 #if ENGINE_MINOR_VERSION >= 2
@@ -17,7 +18,7 @@ int32 FFriendshipperSourceControlState::GetHistorySize() const
 	return History.Num();
 }
 
-TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FFriendshipperSourceControlState::GetHistoryItem( int32 HistoryIndex ) const
+TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FFriendshipperSourceControlState::GetHistoryItem(int32 HistoryIndex) const
 {
 	check(History.IsValidIndex(HistoryIndex));
 	return History[HistoryIndex];
@@ -58,71 +59,71 @@ TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> FFriendshipperSour
 
 // @todo add Slate icons for git specific states (NotAtHead vs Conflicted...)
 #if ENGINE_MINOR_VERSION >= 2
-	#define GET_ICON_RETURN( NAME ) FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), NAME )
+#define GET_ICON_RETURN(NAME) FSlateIcon(FRevisionControlStyleManager::GetStyleSetName(), NAME)
 #else
-	#define GET_ICON_RETURN( NAME ) FSlateIcon(FAppStyle::GetAppStyleSetName(), NAME )
+#define GET_ICON_RETURN(NAME) FSlateIcon(FAppStyle::GetAppStyleSetName(), NAME)
 #endif
 FSlateIcon FFriendshipperSourceControlState::GetIcon() const
 {
 	switch (GetGitState())
 	{
-	case EGitState::NotAtHead:
+		case EGitState::NotAtHead:
 #if ENGINE_MINOR_VERSION >= 2
-		return GET_ICON_RETURN("RevisionControl.NotAtHeadRevision");
+			return GET_ICON_RETURN("RevisionControl.NotAtHeadRevision");
 #else
-		return GET_ICON_RETURN("Perforce.NotAtHeadRevision");
+			return GET_ICON_RETURN("Perforce.NotAtHeadRevision");
 #endif
-	case EGitState::LockedOther:
+		case EGitState::LockedOther:
 #if ENGINE_MINOR_VERSION >= 2
-		return GET_ICON_RETURN("RevisionControl.CheckedOutByOtherUser");
+			return GET_ICON_RETURN("RevisionControl.CheckedOutByOtherUser");
 #else
-		return GET_ICON_RETURN("Perforce.CheckedOutByOtherUser");
+			return GET_ICON_RETURN("Perforce.CheckedOutByOtherUser");
 #endif
-	case EGitState::NotLatest:
+		case EGitState::NotLatest:
 #if ENGINE_MINOR_VERSION >= 2
-		return GET_ICON_RETURN("RevisionControl.ModifiedOtherBranch");
+			return GET_ICON_RETURN("RevisionControl.ModifiedOtherBranch");
 #else
-		return GET_ICON_RETURN("Perforce.ModifiedOtherBranch");
+			return GET_ICON_RETURN("Perforce.ModifiedOtherBranch");
 #endif
-	case EGitState::Unmerged:
+		case EGitState::Unmerged:
 #if ENGINE_MINOR_VERSION >= 2
-		return GET_ICON_RETURN("RevisionControl.Conflicted");
+			return GET_ICON_RETURN("RevisionControl.Conflicted");
 #else
-		return GET_ICON_RETURN("Perforce.Branched");
+			return GET_ICON_RETURN("Perforce.Branched");
 #endif
-	case EGitState::Added:
+		case EGitState::Added:
 #if ENGINE_MINOR_VERSION >= 2
-		return GET_ICON_RETURN("RevisionControl.OpenForAdd");
+			return GET_ICON_RETURN("RevisionControl.OpenForAdd");
 #else
-		return GET_ICON_RETURN("Perforce.OpenForAdd");
+			return GET_ICON_RETURN("Perforce.OpenForAdd");
 #endif
-	case EGitState::Untracked:
+		case EGitState::Untracked:
 #if ENGINE_MINOR_VERSION >= 2
-		return GET_ICON_RETURN("RevisionControl.NotInDepot");
+			return GET_ICON_RETURN("RevisionControl.NotInDepot");
 #else
-		return GET_ICON_RETURN("Perforce.NotInDepot");
+			return GET_ICON_RETURN("Perforce.NotInDepot");
 #endif
-	case EGitState::Deleted:
+		case EGitState::Deleted:
 #if ENGINE_MINOR_VERSION >= 2
-		return GET_ICON_RETURN("RevisionControl.MarkedForDelete");
+			return GET_ICON_RETURN("RevisionControl.MarkedForDelete");
 #else
-		return GET_ICON_RETURN("Perforce.MarkedForDelete");
+			return GET_ICON_RETURN("Perforce.MarkedForDelete");
 #endif
-	case EGitState::Modified:
-	case EGitState::CheckedOut:
+		case EGitState::Modified:
+		case EGitState::CheckedOut:
 #if ENGINE_MINOR_VERSION >= 2
-		return GET_ICON_RETURN("RevisionControl.CheckedOut");
+			return GET_ICON_RETURN("RevisionControl.CheckedOut");
 #else
-		return GET_ICON_RETURN("Perforce.CheckedOut");
+			return GET_ICON_RETURN("Perforce.CheckedOut");
 #endif
-	case EGitState::Ignored:
+		case EGitState::Ignored:
 #if ENGINE_MINOR_VERSION >= 2
-		return GET_ICON_RETURN("RevisionControl.NotInDepot");
+			return GET_ICON_RETURN("RevisionControl.NotInDepot");
 #else
-		return GET_ICON_RETURN("Perforce.NotInDepot");
+			return GET_ICON_RETURN("Perforce.NotInDepot");
 #endif
-	default:
-		return FSlateIcon();
+		default:
+			return FSlateIcon();
 	}
 }
 
@@ -130,31 +131,31 @@ FText FFriendshipperSourceControlState::GetDisplayName() const
 {
 	switch (GetGitState())
 	{
-	case EGitState::NotAtHead:
-		return LOCTEXT("NotCurrent", "Not current");
-	case EGitState::LockedOther:
-		return FText::Format(LOCTEXT("CheckedOutOther", "Checked out by: {0}"), FText::FromString(State.LockUser));
-	case EGitState::NotLatest:
-		return FText::Format(LOCTEXT("ModifiedOtherBranch", "Modified in branch: {0}"), FText::FromString(State.HeadBranch));
-	case EGitState::Unmerged:
-		return LOCTEXT("Conflicted", "Conflicted");
-	case EGitState::Added:
-		return LOCTEXT("OpenedForAdd", "Opened for add");
-	case EGitState::Untracked:
-		return LOCTEXT("NotControlled", "Not Under Revision Control");
-	case EGitState::Deleted:
-		return LOCTEXT("MarkedForDelete", "Marked for delete");
-	case EGitState::Modified:
-	case EGitState::CheckedOut:
-		return LOCTEXT("CheckedOut", "Checked out");
-	case EGitState::Ignored:
-		return LOCTEXT("Ignore", "Ignore");
-	case EGitState::Lockable:
-		return LOCTEXT("ReadOnly", "Read only");
-	case EGitState::None:
-		return LOCTEXT("Unknown", "Unknown");
-	default:
-		return FText();
+		case EGitState::NotAtHead:
+			return LOCTEXT("NotCurrent", "Not current");
+		case EGitState::LockedOther:
+			return FText::Format(LOCTEXT("CheckedOutOther", "Checked out by: {0}"), FText::FromString(State.LockUser));
+		case EGitState::NotLatest:
+			return FText::Format(LOCTEXT("ModifiedOtherBranch", "Modified in branch: {0}"), FText::FromString(State.HeadBranch));
+		case EGitState::Unmerged:
+			return LOCTEXT("Conflicted", "Conflicted");
+		case EGitState::Added:
+			return LOCTEXT("OpenedForAdd", "Opened for add");
+		case EGitState::Untracked:
+			return LOCTEXT("NotControlled", "Not Under Revision Control");
+		case EGitState::Deleted:
+			return LOCTEXT("MarkedForDelete", "Marked for delete");
+		case EGitState::Modified:
+		case EGitState::CheckedOut:
+			return LOCTEXT("CheckedOut", "Checked out");
+		case EGitState::Ignored:
+			return LOCTEXT("Ignore", "Ignore");
+		case EGitState::Lockable:
+			return LOCTEXT("ReadOnly", "Read only");
+		case EGitState::None:
+			return LOCTEXT("Unknown", "Unknown");
+		default:
+			return FText();
 	}
 }
 
@@ -162,31 +163,31 @@ FText FFriendshipperSourceControlState::GetDisplayTooltip() const
 {
 	switch (GetGitState())
 	{
-	case EGitState::NotAtHead:
-		return LOCTEXT("NotCurrent_Tooltip", "The file(s) are not at the head revision");
-	case EGitState::LockedOther:
-		return FText::Format(LOCTEXT("CheckedOutOther_Tooltip", "Checked out by: {0}"), FText::FromString(State.LockUser));
-	case EGitState::NotLatest:
-		return FText::Format(LOCTEXT("ModifiedOtherBranch_Tooltip", "Modified in branch: {0} CL:{1} ({2})"), FText::FromString(State.HeadBranch), FText::FromString(HeadCommit), FText::FromString(HeadAction));
-	case EGitState::Unmerged:
-		return LOCTEXT("ContentsConflict_Tooltip", "The contents of the item conflict with updates received from the repository.");
-	case EGitState::Added:
-		return LOCTEXT("OpenedForAdd_Tooltip", "The file(s) are opened for add");
-	case EGitState::Untracked:
-		return LOCTEXT("NotControlled_Tooltip", "Item is not under revision control.");
-	case EGitState::Deleted:
-		return LOCTEXT("MarkedForDelete_Tooltip", "The file(s) are marked for delete");
-	case EGitState::Modified:
-	case EGitState::CheckedOut:
-		return LOCTEXT("CheckedOut_Tooltip", "The file(s) are checked out");
-	case EGitState::Ignored:
-		return LOCTEXT("Ignored_Tooltip", "Item is being ignored.");
-	case EGitState::Lockable:
-		return LOCTEXT("ReadOnly_Tooltip", "The file(s) are marked locally as read-only");
-	case EGitState::None:
-		return LOCTEXT("Unknown_Tooltip", "Unknown revision control state");
-	default:
-		return FText();
+		case EGitState::NotAtHead:
+			return LOCTEXT("NotCurrent_Tooltip", "The file(s) are not at the head revision");
+		case EGitState::LockedOther:
+			return FText::Format(LOCTEXT("CheckedOutOther_Tooltip", "Checked out by: {0}"), FText::FromString(State.LockUser));
+		case EGitState::NotLatest:
+			return FText::Format(LOCTEXT("ModifiedOtherBranch_Tooltip", "Modified in branch: {0} CL:{1} ({2})"), FText::FromString(State.HeadBranch), FText::FromString(HeadCommit), FText::FromString(HeadAction));
+		case EGitState::Unmerged:
+			return LOCTEXT("ContentsConflict_Tooltip", "The contents of the item conflict with updates received from the repository.");
+		case EGitState::Added:
+			return LOCTEXT("OpenedForAdd_Tooltip", "The file(s) are opened for add");
+		case EGitState::Untracked:
+			return LOCTEXT("NotControlled_Tooltip", "Item is not under revision control.");
+		case EGitState::Deleted:
+			return LOCTEXT("MarkedForDelete_Tooltip", "The file(s) are marked for delete");
+		case EGitState::Modified:
+		case EGitState::CheckedOut:
+			return LOCTEXT("CheckedOut_Tooltip", "The file(s) are checked out");
+		case EGitState::Ignored:
+			return LOCTEXT("Ignored_Tooltip", "Item is being ignored.");
+		case EGitState::Lockable:
+			return LOCTEXT("ReadOnly_Tooltip", "The file(s) are marked locally as read-only");
+		case EGitState::None:
+			return LOCTEXT("Unknown_Tooltip", "Unknown revision control state");
+		default:
+			return FText();
 	}
 }
 
@@ -215,10 +216,20 @@ bool FFriendshipperSourceControlState::CanCheckIn() const
 		return false;
 	}
 
-	// We can check back in if we're locked.
-	if (State.LockState == ELockState::Locked)
+	if (FriendshipperSourceControlUtils::IsFileLFSLockable(LocalFilename))
 	{
-		return true;
+		// We can check back in if we're locked.
+		if (State.LockState == ELockState::Locked)
+		{
+			return true;
+		}
+	}
+	else
+	{
+		if (IsModified())
+		{
+			return true;
+		}
 	}
 
 	return false;
@@ -289,7 +300,7 @@ bool FFriendshipperSourceControlState::GetOtherBranchHeadModification(FString& H
 
 	HeadBranchOut = State.HeadBranch;
 	ActionOut = HeadAction; // TODO: from ERemoteState
-	HeadChangeListOut = 0; // TODO: get head commit
+	HeadChangeListOut = 0;	// TODO: get head commit
 	return true;
 }
 
@@ -306,8 +317,7 @@ bool FFriendshipperSourceControlState::IsSourceControlled() const
 bool FFriendshipperSourceControlState::IsAdded() const
 {
 	// We don't stage files in this plugin on purpose, but treat untracked + locked files as added
-	return (State.TreeState == ETreeState::Staged) ||
-		(State.TreeState == ETreeState::Untracked && State.LockState == ELockState::Locked);
+	return (State.TreeState == ETreeState::Staged) || (State.TreeState == ETreeState::Untracked && State.LockState == ELockState::Locked);
 }
 
 bool FFriendshipperSourceControlState::IsDeleted() const
@@ -344,8 +354,7 @@ bool FFriendshipperSourceControlState::IsUnknown() const
 
 bool FFriendshipperSourceControlState::IsModified() const
 {
-	return State.TreeState == ETreeState::Working ||
-		State.TreeState == ETreeState::Staged;
+	return State.TreeState == ETreeState::Working || State.TreeState == ETreeState::Staged;
 }
 
 bool FFriendshipperSourceControlState::CanAdd() const
@@ -370,10 +379,10 @@ EGitState::Type FFriendshipperSourceControlState::GetGitState() const
 	// No matter what, we must pull from remote, even if we have locked or if we have modified.
 	switch (State.RemoteState)
 	{
-	case ERemoteState::NotAtHead:
-		return EGitState::NotAtHead;
-	default:
-		break;
+		case ERemoteState::NotAtHead:
+			return EGitState::NotAtHead;
+		default:
+			break;
 	}
 
 	/** Someone else locked this file across branches. */
@@ -396,14 +405,14 @@ EGitState::Type FFriendshipperSourceControlState::GetGitState() const
 
 	switch (State.FileState)
 	{
-	case EFileState::Unmerged:
-		return EGitState::Unmerged;
-	case EFileState::Deleted:
-		return EGitState::Deleted;
-	case EFileState::Modified:
-		return EGitState::Modified;
-	default:
-		break;
+		case EFileState::Unmerged:
+			return EGitState::Unmerged;
+		case EFileState::Deleted:
+			return EGitState::Deleted;
+		case EFileState::Modified:
+			return EGitState::Modified;
+		default:
+			break;
 	}
 
 	if (State.TreeState == ETreeState::Untracked)

@@ -4,6 +4,8 @@
 #include "Misc/ScopeRWLock.h"
 #include "FriendshipperClient.generated.h"
 
+struct FOtelScopedSpan;
+
 USTRUCT()
 struct FUserInfo
 {
@@ -173,6 +175,87 @@ struct FLockResponse
 	FLockResponseInner Batch;
 };
 
+USTRUCT()
+struct FStorageUploadRequest
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString Path;
+
+	UPROPERTY()
+	FString Prefix;
+};
+
+USTRUCT()
+struct FStorageDownloadRequest
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString Path;
+
+	UPROPERTY()
+	FString Key;
+};
+
+USTRUCT()
+struct FStorageListRequest
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString Prefix;
+};
+
+USTRUCT()
+struct FFileHistoryRevision
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString Filename;
+
+	UPROPERTY()
+	FString CommitId;
+
+	UPROPERTY()
+	FString ShortCommitId;
+
+	UPROPERTY()
+	int32 CommitIdNumber;
+
+	UPROPERTY()
+	int32 RevisionNumber;
+
+	UPROPERTY()
+	FString FileHash;
+
+	UPROPERTY()
+	FString Description;
+
+	UPROPERTY()
+	FString UserName;
+
+	UPROPERTY()
+	FString Action;
+
+	UPROPERTY()
+	FDateTime Date;
+
+	UPROPERTY()
+	int32 FileSize;
+};
+
+USTRUCT()
+struct FFileHistoryResponse
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TArray<FFileHistoryRevision> Revisions;
+};
+
 class FFriendshipperClient
 {
 public:
@@ -188,6 +271,10 @@ public:
 	bool Revert(const TArray<FString>& InFiles);
 	bool LockFiles(const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages);
 	bool UnlockFiles(const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages);
+	bool UploadFile(const FString& Path, const FString& Prefix, const FSimpleDelegate& OnComplete);
+	bool DownloadFile(const FString& Path, const FString& Key, const FSimpleDelegate& OnComplete);
+	bool ListModelNames(const FString& Prefix, const TDelegate<void(TArray<FString>)>& OnComplete);
+	bool GetFileHistory(const FString& Path, FFileHistoryResponse& OutResults);
 
 	void AddNonceHeader(const TSharedRef<IHttpRequest>& Request) const;
 
@@ -196,10 +283,12 @@ public:
 private:
 	static void PromptConflicts(TArray<FString>& Files);
 
-	TSharedRef<IHttpRequest> CreateRequest(const FString& Path, const FString& Method) const;
+	TSharedRef<IHttpRequest> CreateRequest(const FString& Path, const FString& Method, const FOtelScopedSpan& OtelScopedSpan) const;
 
 	// Friendshipper service URL - probably http://localhost:8484
 	FString ServiceUrl;
+
+	FUserInfo UserInfo;
 
 	FRWLock LastRepoStatusLock;
 	TOptional<FRepoStatus> LastRepoStatus;
