@@ -100,7 +100,7 @@ static void CollectCommandErrors(FOtelScopedSpan& ScopedSpan, FFriendshipperSour
 
 bool FFriendshipperConnectWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);
@@ -156,7 +156,7 @@ FName FFriendshipperCheckOutWorker::GetName() const
 
 bool FFriendshipperCheckOutWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);
@@ -191,7 +191,7 @@ const FText EmptyCommitMsg;
 
 bool FFriendshipperCheckInWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);
@@ -253,7 +253,7 @@ FName FFriendshipperMarkForAddWorker::GetName() const
 
 bool FFriendshipperMarkForAddWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);
@@ -282,7 +282,7 @@ FName FFriendshipperDeleteWorker::GetName() const
 
 bool FFriendshipperDeleteWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);
@@ -333,7 +333,7 @@ FName FFriendshipperRevertWorker::GetName() const
 
 bool FFriendshipperRevertWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);
@@ -385,7 +385,7 @@ FName FFriendshipperFetchWorker::GetName() const
 
 bool FFriendshipperFetchWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);
@@ -425,7 +425,7 @@ FName FFriendshipperUpdateStatusWorker::GetName() const
 
 bool FFriendshipperUpdateStatusWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);
@@ -512,7 +512,7 @@ FName FFriendshipperCopyWorker::GetName() const
 
 bool FFriendshipperCopyWorker::Execute(FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);
@@ -545,7 +545,7 @@ FName FFriendshipperResolveWorker::GetName() const
 
 bool FFriendshipperResolveWorker::Execute(class FFriendshipperSourceControlCommand& InCommand)
 {
-	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelScopedSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 	ON_SCOPE_EXIT
 	{
 		CollectCommandErrors(OtelScopedSpan, InCommand);

@@ -223,10 +223,10 @@ struct FFileHistoryRevision
 	FString ShortCommitId;
 
 	UPROPERTY()
-	int32 CommitIdNumber;
+	int32 CommitIdNumber = 0;
 
 	UPROPERTY()
-	int32 RevisionNumber;
+	int32 RevisionNumber = 0;
 
 	UPROPERTY()
 	FString FileHash;
@@ -244,7 +244,7 @@ struct FFileHistoryRevision
 	FDateTime Date;
 
 	UPROPERTY()
-	int32 FileSize;
+	int32 FileSize = 0;
 };
 
 USTRUCT()
@@ -254,6 +254,21 @@ struct FFileHistoryResponse
 
 	UPROPERTY()
 	TArray<FFileHistoryRevision> Revisions;
+};
+
+USTRUCT()
+struct FEngineNotifyStateRequest
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool InSlowTask = false;
+};
+
+enum class ERequestProcessMode
+{
+	Wait,
+	ForceTickHttp,
 };
 
 class FFriendshipperClient
@@ -275,6 +290,7 @@ public:
 	bool DownloadFile(const FString& Path, const FString& Key, const FSimpleDelegate& OnComplete);
 	bool ListModelNames(const FString& Prefix, const TDelegate<void(TArray<FString>)>& OnComplete);
 	bool GetFileHistory(const FString& Path, FFileHistoryResponse& OutResults);
+	bool NotifyEngineState(ERequestProcessMode ProcessMode);
 
 	void AddNonceHeader(const TSharedRef<IHttpRequest>& Request) const;
 

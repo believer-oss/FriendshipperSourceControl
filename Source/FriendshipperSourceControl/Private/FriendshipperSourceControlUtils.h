@@ -19,7 +19,6 @@ enum class EForceStatusRefresh : uint8;
 class FFriendshipperScopedTempFile
 {
 public:
-
 	/** Constructor - open & write string to temp file */
 	FFriendshipperScopedTempFile(const FText& InText);
 
@@ -39,21 +38,21 @@ struct FFriendshipperVersion;
 namespace FriendshipperSourceControlUtils
 {
 	/**
-		*  Returns an updated repo root if all selected files are in a plugin subfolder, and the plugin subfolder is a git repo
-		*  This supports the case where each plugin is a sub module
-		*
-		* @param AbsoluteFilePaths		The list of files in the SC operation
-		* @param PathToRepositoryRoot	The original path to the repository root (used by default)
-		*/
+	 *  Returns an updated repo root if all selected files are in a plugin subfolder, and the plugin subfolder is a git repo
+	 *  This supports the case where each plugin is a sub module
+	 *
+	 * @param AbsoluteFilePaths		The list of files in the SC operation
+	 * @param PathToRepositoryRoot	The original path to the repository root (used by default)
+	 */
 	FString ChangeRepositoryRootIfSubmodule(const TArray<FString>& AbsoluteFilePaths, const FString& PathToRepositoryRoot);
 
 	/**
-		*  Returns an updated repo root if all selected file is in a plugin subfolder, and the plugin subfolder is a git repo
-		*  This supports the case where each plugin is a sub module
-		*
-		* @param AbsoluteFilePath		The file in the SC operation
-		* @param PathToRepositoryRoot	The original path to the repository root (used by default)
-		*/
+	 *  Returns an updated repo root if all selected file is in a plugin subfolder, and the plugin subfolder is a git repo
+	 *  This supports the case where each plugin is a sub module
+	 *
+	 * @param AbsoluteFilePath		The file in the SC operation
+	 * @param PathToRepositoryRoot	The original path to the repository root (used by default)
+	 */
 	FString ChangeRepositoryRootIfSubmodule(const FString& AbsoluteFilePath, const FString& PathToRepositoryRoot);
 
 	/**
@@ -75,20 +74,20 @@ namespace FriendshipperSourceControlUtils
 	 * @param InVersionString       The version string returned by `git --version`
 	 * @param OutVersion            The FFriendshipperVersion to populate
 	 */
-	 void ParseGitVersion(const FString& InVersionString, FFriendshipperVersion* OutVersion);
+	void ParseGitVersion(const FString& InVersionString, FFriendshipperVersion* OutVersion);
 
 	/**
-		* Check git for various optional capabilities by various means.
-		* @param InPathToGitBinary		The path to the Git binary
-		* @param OutGitVersion			If provided, populate with the git version parsed from "version" command
-		*/
+	 * Check git for various optional capabilities by various means.
+	 * @param InPathToGitBinary		The path to the Git binary
+	 * @param OutGitVersion			If provided, populate with the git version parsed from "version" command
+	 */
 	void FindGitCapabilities(const FString& InPathToGitBinary, FFriendshipperVersion* OutVersion);
 
 	/**
-		* Run a Git "lfs" command to check the availability of the "Large File System" extension.
-		* @param InPathToGitBinary		The path to the Git binary
-		* @param OutGitVersion			If provided, populate with the git version parsed from "version" command
-		*/
+	 * Run a Git "lfs" command to check the availability of the "Large File System" extension.
+	 * @param InPathToGitBinary		The path to the Git binary
+	 * @param OutGitVersion			If provided, populate with the git version parsed from "version" command
+	 */
 	void FindGitLfsCapabilities(const FString& InPathToGitBinary, FFriendshipperVersion* OutVersion);
 
 	/**
@@ -123,11 +122,11 @@ namespace FriendshipperSourceControlUtils
 	 */
 	bool GetRemoteBranchName(const FString& InPathToGitBinary, const FString& InRepositoryRoot, FString& OutBranchName);
 
-	 /**
+	/**
 	 * Get Git remote tracking branches that match wildcard
 	 * @returns false if no matching branches
 	 */
-	 bool GetRemoteBranchesWildcard(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const FString& PatternMatch, TArray<FString>& OutBranchNames);
+	bool GetRemoteBranchesWildcard(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const FString& PatternMatch, TArray<FString>& OutBranchNames);
 
 	/**
 	 * Get Git current commit details
@@ -183,7 +182,7 @@ namespace FriendshipperSourceControlUtils
 	 * @param	OutErrorMessages	Any errors (from StdErr) as an array per-line
 	 */
 	void CheckRemote(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& Files,
-					 TArray<FString>& OutErrorMessages, TMap<FString, FFriendshipperSourceControlState>& OutStates);
+		TArray<FString>& OutErrorMessages, TMap<FString, FFriendshipperSourceControlState>& OutStates);
 
 	/**
 	 * Run a Git "status" command and parse it.
@@ -207,7 +206,7 @@ namespace FriendshipperSourceControlUtils
 	 * @param	InParameter			The parameters to the Git show command (rev:path)
 	 * @param	InDumpFileName		The temporary file to dump the revision
 	 * @returns true if the command succeeded and returned no errors
-	*/
+	 */
 	bool RunDumpToFile(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const FString& InParameter, const FString& InDumpFileName);
 
 	/**
@@ -253,8 +252,8 @@ namespace FriendshipperSourceControlUtils
 	bool UpdateCachedStates(const TMap<const FString, FFriendshipperState>& InResults);
 
 	/**
-	* Helper function for various commands to collect new states.
-	*/
+	 * Helper function for various commands to collect new states.
+	 */
 	void CollectNewStates(const TMap<FString, FFriendshipperSourceControlState>& InStates, TMap<const FString, FFriendshipperState>& OutResults);
 
 	/**
@@ -263,14 +262,14 @@ namespace FriendshipperSourceControlUtils
 	void CollectNewStates(const TArray<FString>& InFiles, TMap<const FString, FFriendshipperState>& OutResults, EFileState::Type FileState, ETreeState::Type TreeState = ETreeState::Unset, ELockState::Type LockState = ELockState::Unset, ERemoteState::Type RemoteState = ERemoteState::Unset);
 
 	/**
-		 * Run 'git lfs locks" to extract all lock information for all files in the repository
-		 *
-		 * @param	InRepositoryRoot	The Git repository from where to run the command - usually the Game directory
-		 * @param   GitBinaryFallBack   The Git binary fallback path
-		 * @param	OutErrorMessages    Any errors (from StdErr) as an array per-line
-		 * @param	OutLocks		    The lock results (file, username)
-		 * @returns true if the command succeeded and returned no errors
-		 */
+	 * Run 'git lfs locks" to extract all lock information for all files in the repository
+	 *
+	 * @param	InRepositoryRoot	The Git repository from where to run the command - usually the Game directory
+	 * @param   GitBinaryFallBack   The Git binary fallback path
+	 * @param	OutErrorMessages    Any errors (from StdErr) as an array per-line
+	 * @param	OutLocks		    The lock results (file, username)
+	 * @returns true if the command succeeded and returned no errors
+	 */
 	bool GetAllLocks(const FString& InRepositoryRoot, const FString& GitBinaryFallBack, TArray<FString>& OutErrorMessages, TMap<FString, FString>& OutLocks, bool bInvalidateCache = false);
 
 	/**
@@ -288,5 +287,8 @@ namespace FriendshipperSourceControlUtils
 	 */
 	bool CheckLFSLockable(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const TArray<FString>& InFiles, TArray<FString>& OutErrorMessages);
 
-	TSharedPtr< class ISourceControlRevision, ESPMode::ThreadSafe > GetOriginRevisionOnBranch( const FString & InPathToGitBinary, const FString & InRepositoryRoot, const FString & InRelativeFileName, TArray< FString > & OutErrorMessages, const FString & BranchName );
-}
+	TSharedPtr<class ISourceControlRevision, ESPMode::ThreadSafe> GetOriginRevisionOnBranch(const FString& InPathToGitBinary, const FString& InRepositoryRoot, const FString& InRelativeFileName, TArray<FString>& OutErrorMessages, const FString& BranchName);
+
+	FName OtelTracerNameForThread();
+
+} // namespace FriendshipperSourceControlUtils

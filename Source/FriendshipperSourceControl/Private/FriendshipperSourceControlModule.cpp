@@ -36,16 +36,42 @@
 
 TArray<FString> FFriendshipperSourceControlModule::EmptyStringArray;
 
-const FName kOtelTracer = FName(TEXT("FriendshipperSourceControl"));
-
 template <typename Type>
 static TSharedRef<IFriendshipperSourceControlWorker, ESPMode::ThreadSafe> CreateWorker()
 {
 	return MakeShareable(new Type());
 }
 
+static bool IsForceDisabled()
+{
+	const FString ForceDisableEnvVar = FPlatformMisc::GetEnvironmentVariable(TEXT("UE_FRIENDSHIPPER_FORCE_DISABLE"));
+	if (ForceDisableEnvVar.IsEmpty() == false)
+	{
+		UE_LOG(LogSourceControl, Display, TEXT("Found UE_FRIENDSHIPPER_FORCE_DISABLE=%s"), *ForceDisableEnvVar);
+	}
+
+	if ((ForceDisableEnvVar == TEXT("1")) || (ForceDisableEnvVar == TEXT("true")))
+	{
+		UE_LOG(LogSourceControl, Display, TEXT("Found env var UE_FRIENDSHIPPER_FORCE_DISABLE=%s, disabling Friendshipper source control"), *ForceDisableEnvVar);
+		return true;
+	}
+
+	if (FParse::Param(FCommandLine::Get(), TEXT("DisableFriendshipperSourceControl")))
+	{
+		UE_LOG(LogSourceControl, Display, TEXT("Found cmdline arg -DisableFriendshipperSourceControl, disabling Friendshipper source control"), *ForceDisableEnvVar);
+		return true;
+	}
+
+	return false;
+}
+
 void FFriendshipperSourceControlModule::StartupModule()
 {
+	if (IsForceDisabled())
+	{
+		return;
+	}
+
 	// Register our operations (implemented in GitSourceControlOperations.cpp by subclassing from Engine\Source\Developer\SourceControl\Public\SourceControlOperations.h)
 	FriendshipperSourceControlProvider.RegisterWorker("Connect", FGetFriendshipperSourceControlWorker::CreateStatic(&CreateWorker<FFriendshipperConnectWorker>));
 	// Note: this provider uses the "CheckOut" command only with Git LFS 2 "lock" command, since Git itself has no lock command (all tracked files in the working copy are always already checked-out).
@@ -65,20 +91,34 @@ void FFriendshipperSourceControlModule::StartupModule()
 	// Make sure we've initialized the provider
 	FriendshipperSourceControlProvider.Init();
 
-	UE::Tasks::FTask Task = UE::Tasks::Launch(
-		UE_SOURCE_LOCATION, [this]
+	// In commandlet mode, we need to make sure this is synchronous since some commandlets (e.g. BuildPaths/BuildHLODs) expect
+	// the source control interface to be ready by the time their code is run.
+	if (IsRunningCommandlet())
+	{
+		FUserInfo UserInfo;
+		if (FriendshipperSourceControlProvider.GetFriendshipperClient().GetUserInfo(UserInfo))
 		{
-			FUserInfo UserInfo;
-			if (FriendshipperSourceControlProvider.GetFriendshipperClient().GetUserInfo(UserInfo))
+			FriendshipperSettings.SetLfsUserName(UserInfo.Username);
+			FriendshipperSourceControlProvider.UpdateSettings();
+		}
+	}
+	else
+	{
+		UE::Tasks::FTask Task = UE::Tasks::Launch(
+			UE_SOURCE_LOCATION, [this]
 			{
-				AsyncTask(ENamedThreads::GameThread, [this, UserInfo]
-					{
-						FriendshipperSettings.SetLfsUserName(UserInfo.Username);
-						FriendshipperSourceControlProvider.UpdateSettings();
-					});
-			}
-		},
-		UE::Tasks::ETaskPriority::BackgroundNormal);
+				FUserInfo UserInfo;
+				if (FriendshipperSourceControlProvider.GetFriendshipperClient().GetUserInfo(UserInfo))
+				{
+					AsyncTask(ENamedThreads::GameThread, [this, UserInfo]
+						{
+							FriendshipperSettings.SetLfsUserName(UserInfo.Username);
+							FriendshipperSourceControlProvider.UpdateSettings();
+						});
+				}
+			},
+			UE::Tasks::ETaskPriority::BackgroundNormal);
+	}
 
 	// Bind our revision control provider to the editor
 	IModularFeatures::Get().RegisterModularFeature("SourceControl", &FriendshipperSourceControlProvider);
@@ -118,6 +158,11 @@ void FFriendshipperSourceControlModule::StartupModule()
 
 void FFriendshipperSourceControlModule::ShutdownModule()
 {
+	if (IsForceDisabled())
+	{
+		return;
+	}
+
 	HttpRouter.OnStatusUpdateRecieved.Unbind();
 
 	// shut down the provider, as this module is going away

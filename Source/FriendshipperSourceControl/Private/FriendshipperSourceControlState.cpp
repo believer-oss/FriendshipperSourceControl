@@ -359,7 +359,17 @@ bool FFriendshipperSourceControlState::IsModified() const
 
 bool FFriendshipperSourceControlState::CanAdd() const
 {
-	return State.TreeState == ETreeState::Untracked;
+	if (State.TreeState == ETreeState::Untracked)
+	{
+		return true;
+	}
+
+	if (State.TreeState == ETreeState::NotInRepo)
+	{
+		return true;
+	}
+
+	return false;
 }
 
 bool FFriendshipperSourceControlState::IsConflicted() const

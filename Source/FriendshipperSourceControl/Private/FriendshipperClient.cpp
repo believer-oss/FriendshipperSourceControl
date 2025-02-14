@@ -1,5 +1,6 @@
 ﻿#include "FriendshipperClient.h"
-#include "FriendshipperSourceControlModule.h" // kOtelTracer
+#include "FriendshipperSourceControlModule.h" // FriendshipperSourceControlUtils::OtelTracerNameForThread()
+#include "FriendshipperSourceControlUtils.h"
 
 #include "HttpManager.h"
 #include "HttpModule.h"
@@ -23,7 +24,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Local helpers
 
-static bool ProcessRequestAndWait(const TSharedRef<IHttpRequest>& Request, FFriendshipperClient& Client)
+static bool ProcessRequest(const TSharedRef<IHttpRequest>& Request, FFriendshipperClient& Client, ERequestProcessMode ProcessMode)
 {
 	if (!Request->ProcessRequest())
 	{
@@ -36,7 +37,7 @@ static bool ProcessRequestAndWait(const TSharedRef<IHttpRequest>& Request, FFrie
 		while (Request->GetStatus() == EHttpRequestStatus::Processing && !IsEngineExitRequested())
 		{
 			const double AppTime = FPlatformTime::Seconds();
-			if (IsInGameThread())
+			if (IsInGameThread() || ProcessMode == ERequestProcessMode::ForceTickHttp)
 			{
 				FHttpModule::Get().GetHttpManager().Tick(AppTime - LastTime);
 				LastTime = AppTime;
@@ -68,7 +69,7 @@ static bool ProcessRequestAndWait(const TSharedRef<IHttpRequest>& Request, FFrie
 template <typename T>
 static bool ParseResponse(const TSharedPtr<IHttpResponse>& Response, T* ResponseData, FOtelScopedSpan& ScopedSpan)
 {
-	OTEL_TRACER_SCOPED_LOG_HOOK(kOtelTracer, LogSourceControl, ELogVerbosity::Warning);
+	OTEL_TRACER_SCOPED_LOG_HOOK(FriendshipperSourceControlUtils::OtelTracerNameForThread(), LogSourceControl, ELogVerbosity::Warning);
 
 	bool bSuccess = false;
 
@@ -134,7 +135,7 @@ enum class ELockOperation
 
 static bool RequestLockOperation(TSharedRef<IHttpRequest> Request, FFriendshipperClient& Client, ELockOperation LockOperation, const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	const TCHAR* OperationName = (LockOperation == ELockOperation::Lock) ? TEXT("lock") : TEXT("unlock");
 
@@ -150,7 +151,7 @@ static bool RequestLockOperation(TSharedRef<IHttpRequest> Request, FFriendshippe
 
 	Request->SetContentAsString(Body);
 
-	ProcessRequestAndWait(Request, Client);
+	ProcessRequest(Request, Client, ERequestProcessMode::Wait);
 
 	FLockResponse LockResponse;
 	if (ParseResponse(Request->GetResponse(), &LockResponse, OtelSpan))
@@ -230,13 +231,13 @@ void FFriendshipperClient::OnRecievedHttpStatusUpdate(const FRepoStatus& RepoSta
 
 bool FFriendshipperClient::Diff(TArray<FString>& OutResults)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/diff"), TEXT("GET"), OtelSpan);
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/diff"), TEXT("GET"), OtelSpan);
 
-	ProcessRequestAndWait(pRequest, *this);
+	ProcessRequest(Request, *this, ERequestProcessMode::Wait);
 
-	if (const TSharedPtr<IHttpResponse> Response = pRequest->GetResponse())
+	if (const TSharedPtr<IHttpResponse> Response = Request->GetResponse())
 	{
 		if (Response->GetResponseCode() != 0)
 		{
@@ -265,13 +266,13 @@ bool FFriendshipperClient::Diff(TArray<FString>& OutResults)
 
 bool FFriendshipperClient::GetUserInfo(FUserInfo& OutUserInfo)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/gh/user"), TEXT("GET"), OtelSpan);
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/gh/user"), TEXT("GET"), OtelSpan);
 
-	ProcessRequestAndWait(pRequest, *this);
+	ProcessRequest(Request, *this, ERequestProcessMode::Wait);
 
-	if (ParseResponse(pRequest->GetResponse(), &UserInfo, OtelSpan))
+	if (ParseResponse(Request->GetResponse(), &UserInfo, OtelSpan))
 	{
 		OutUserInfo = UserInfo;
 		return true;
@@ -282,7 +283,7 @@ bool FFriendshipperClient::GetUserInfo(FUserInfo& OutUserInfo)
 
 bool FFriendshipperClient::GetStatus(EForceStatusRefresh ForceRefresh, FRepoStatus& OutStatus)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	bool bIsSet = false;
 	{
@@ -293,12 +294,18 @@ bool FFriendshipperClient::GetStatus(EForceStatusRefresh ForceRefresh, FRepoStat
 	bool bSuccess = true;
 	if ((bIsSet == false) || (ForceRefresh == EForceStatusRefresh::True))
 	{
-		const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/status?skipDllCheck=true&skipEngineUpdate=true"), TEXT("GET"), OtelSpan);
+		// Synchronous execution of this status request won't give the Friendshipper plugin a chance to respond to any OFPA requests
+		// from the Friendshipper app back to UE, so skip it in commandlet/game thread cases.
+		const bool bSkipOFPATranslation = FApp::IsUnattended() || IsRunningCommandlet() || IsInGameThread();
+		const TCHAR* SkipOFPATranslationStr = bSkipOFPATranslation ? TEXT("true") : TEXT("false");
 
-		ProcessRequestAndWait(pRequest, *this);
+		const FString URL = FString::Printf(TEXT("repo/status?skipDllCheck=true&skipEngineUpdate=true&skipDisplayNames=%s"), SkipOFPATranslationStr);
+		const TSharedRef<IHttpRequest> Request = CreateRequest(*URL, TEXT("GET"), OtelSpan);
+
+		ProcessRequest(Request, *this, ERequestProcessMode::Wait);
 
 		FRepoStatus TempStatus;
-		if (ParseResponse(pRequest->GetResponse(), &TempStatus, OtelSpan))
+		if (ParseResponse(Request->GetResponse(), &TempStatus, OtelSpan))
 		{
 			FWriteScopeLock Lock = FWriteScopeLock(LastRepoStatusLock);
 			LastRepoStatus = TempStatus;
@@ -320,7 +327,7 @@ bool FFriendshipperClient::GetStatus(EForceStatusRefresh ForceRefresh, FRepoStat
 
 bool FFriendshipperClient::Submit(const FString& InCommitMsg, const TArray<FString>& InFiles)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	FString Body;
 	{
@@ -338,17 +345,17 @@ bool FFriendshipperClient::Submit(const FString& InCommitMsg, const TArray<FStri
 		FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
 	}
 
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("repo/gh/submit"), TEXT("POST"), OtelSpan);
-	pRequest->SetContentAsString(Body);
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/gh/submit"), TEXT("POST"), OtelSpan);
+	Request->SetContentAsString(Body);
 
-	ProcessRequestAndWait(pRequest, *this);
+	ProcessRequest(Request, *this, ERequestProcessMode::Wait);
 
-	return ParseResponse(pRequest->GetResponse(), OtelSpan);
+	return ParseResponse(Request->GetResponse(), OtelSpan);
 }
 
 bool FFriendshipperClient::Revert(const TArray<FString>& InFiles)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	FString Body;
 	{
@@ -363,14 +370,14 @@ bool FFriendshipperClient::Revert(const TArray<FString>& InFiles)
 	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("repo/revert"), TEXT("POST"), OtelSpan);
 	Request->SetContentAsString(Body);
 
-	ProcessRequestAndWait(Request, *this);
+	ProcessRequest(Request, *this, ERequestProcessMode::Wait);
 
 	return ParseResponse(Request->GetResponse(), OtelSpan);
 }
 
 bool FFriendshipperClient::LockFiles(const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	check(OutFailedFiles);
 
@@ -398,7 +405,7 @@ bool FFriendshipperClient::LockFiles(const TArray<FString>& InFiles, TArray<FStr
 
 bool FFriendshipperClient::UnlockFiles(const TArray<FString>& InFiles, TArray<FString>* OutFailedFiles, TArray<FString>* OutFailureMessages)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	check(OutFailedFiles);
 
@@ -421,19 +428,20 @@ bool FFriendshipperClient::UnlockFiles(const TArray<FString>& InFiles, TArray<FS
 
 bool FFriendshipperClient::GetFileHistory(const FString& Path, FFileHistoryResponse& OutResults)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	// format path as urlencoded query param
 	FString EncodedPath = FGenericPlatformHttp::UrlEncode(Path);
 	FString HistoryPath = FString::Printf(TEXT("repo/file-history?path=%s"), *EncodedPath);
 
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(*HistoryPath, TEXT("GET"), OtelSpan);
+	const TSharedRef<IHttpRequest> Request = CreateRequest(*HistoryPath, TEXT("GET"), OtelSpan);
 
-	ProcessRequestAndWait(pRequest, *this);
+	Request->SetTimeout(10);
+	ProcessRequest(Request, *this, ERequestProcessMode::Wait);
 
 	// parse response
 	FFileHistoryResponse HistoryResponse;
-	if (ParseResponse(pRequest->GetResponse(), &HistoryResponse, OtelSpan))
+	if (ParseResponse(Request->GetResponse(), &HistoryResponse, OtelSpan))
 	{
 		// convert to source control revisions
 		OutResults = MoveTemp(HistoryResponse);
@@ -443,15 +451,34 @@ bool FFriendshipperClient::GetFileHistory(const FString& Path, FFileHistoryRespo
 	return false;
 }
 
+bool FFriendshipperClient::NotifyEngineState(ERequestProcessMode ProcessMode)
+{
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
+
+	const TCHAR* InSlowTaskStr = GIsSlowTask ? TEXT("true") : TEXT("false");
+	FString URL = FString::Printf(TEXT("engine/notify-state?inSlowTask=%s"), InSlowTaskStr);
+
+	const TSharedRef<IHttpRequest> Request = CreateRequest(*URL, TEXT("POST"), OtelSpan);
+
+	ProcessRequest(Request, *this, ProcessMode);
+
+	if (const TSharedPtr<IHttpResponse> Response = Request->GetResponse())
+	{
+		return Response->GetResponseCode() == 200;
+	}
+
+	return false;
+}
+
 bool FFriendshipperClient::CheckSystemStatus()
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
-	const TSharedRef<IHttpRequest> pRequest = CreateRequest(TEXT("system/status"), TEXT("GET"), OtelSpan);
+	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("system/status"), TEXT("GET"), OtelSpan);
 
-	ProcessRequestAndWait(pRequest, *this);
+	ProcessRequest(Request, *this, ERequestProcessMode::Wait);
 
-	if (const TSharedPtr<IHttpResponse> Response = pRequest->GetResponse())
+	if (const TSharedPtr<IHttpResponse> Response = Request->GetResponse())
 	{
 		return Response->GetResponseCode() == 200;
 	}
@@ -461,7 +488,7 @@ bool FFriendshipperClient::CheckSystemStatus()
 
 bool FFriendshipperClient::UploadFile(const FString& Path, const FString& Prefix, const FSimpleDelegate& OnComplete)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	FString Body;
 	{
@@ -476,7 +503,7 @@ bool FFriendshipperClient::UploadFile(const FString& Path, const FString& Prefix
 	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("storage/upload"), TEXT("POST"), OtelSpan);
 	Request->SetContentAsString(Body);
 
-	bool bSuccess = ProcessRequestAndWait(Request, *this);
+	bool bSuccess = ProcessRequest(Request, *this, ERequestProcessMode::Wait);
 
 	OnComplete.ExecuteIfBound();
 
@@ -485,7 +512,7 @@ bool FFriendshipperClient::UploadFile(const FString& Path, const FString& Prefix
 
 bool FFriendshipperClient::DownloadFile(const FString& Path, const FString& Key, const FSimpleDelegate& OnComplete)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	FString Body;
 	{
@@ -500,7 +527,7 @@ bool FFriendshipperClient::DownloadFile(const FString& Path, const FString& Key,
 	const TSharedRef<IHttpRequest> Request = CreateRequest(TEXT("storage/download"), TEXT("POST"), OtelSpan);
 	Request->SetContentAsString(Body);
 
-	bool bSuccess = ProcessRequestAndWait(Request, *this);
+	bool bSuccess = ProcessRequest(Request, *this, ERequestProcessMode::Wait);
 
 	OnComplete.ExecuteIfBound();
 
@@ -509,7 +536,7 @@ bool FFriendshipperClient::DownloadFile(const FString& Path, const FString& Key,
 
 bool FFriendshipperClient::ListModelNames(const FString& Prefix, const TDelegate<void(TArray<FString>)>& OnComplete)
 {
-	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(kOtelTracer);
+	FOtelScopedSpan OtelSpan = OTEL_TRACER_SPAN_FUNC(FriendshipperSourceControlUtils::OtelTracerNameForThread());
 
 	FString Body;
 	{

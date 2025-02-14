@@ -38,22 +38,22 @@ static FName ProviderName("Friendshipper");
 
 void FFriendshipperSourceControlProvider::Init(bool bUnusedForceConnection)
 {
-	// Init() is called multiple times at startup: do not check git each time
+	// Init() is called multiple times at startup: do not reinit multiple times
+	if (!bFriendshipperAvailable)
+	{
+		FriendshipperClient.Init("http://localhost:8484");
+		bFriendshipperAvailable = true;
+	}
+
 	if (!bGitAvailable)
 	{
 		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("FriendshipperSourceControl"));
 		if (Plugin.IsValid())
 		{
-			UE_LOG(LogSourceControl, Log, TEXT("Git plugin '%s'"), *(Plugin->GetDescriptor().VersionName));
+			UE_LOG(LogSourceControl, Log, TEXT("Friendshipper Source Control plugin '%s'"), *(Plugin->GetDescriptor().VersionName));
 		}
 
 		CheckGitAvailability();
-	}
-
-	if (!bFriendshipperAvailable)
-	{
-		FriendshipperClient.Init("http://localhost:8484");
-		bFriendshipperAvailable = true;
 	}
 }
 
@@ -196,13 +196,26 @@ void FFriendshipperSourceControlProvider::CheckRepositoryStatus()
 				UE_LOG(LogSourceControl, Error, TEXT("Failed to update repo on initialization."));
 				bGitRepositoryFound = false;
 			};
-			AsyncTask(ENamedThreads::GameThread, MoveTemp(ErrorFunc));
+
+			if (IsInGameThread())
+			{
+				ErrorFunc();
+			}
+			else
+			{
+
+				AsyncTask(ENamedThreads::GameThread, MoveTemp(ErrorFunc));
+			}
 		}
 	};
 
 	if (!FApp::IsUnattended() && !IsRunningCommandlet())
 	{
 		AsyncTask(ENamedThreads::AnyHiPriThreadNormalTask, MoveTemp(InitFunc));
+	}
+	else
+	{
+		InitFunc();
 	}
 }
 
@@ -682,7 +695,7 @@ TSharedRef<class SWidget> FFriendshipperSourceControlProvider::MakeSettingsWidge
 }
 #endif
 
-ECommandResult::Type FFriendshipperSourceControlProvider::ExecuteSynchronousCommand(FFriendshipperSourceControlCommand& InCommand, const FText& Task, bool bSuppressResponseMsg)
+ECommandResult::Type FFriendshipperSourceControlProvider::ExecuteSynchronousCommand(FFriendshipperSourceControlCommand& InCommand, const FText& Task, bool bInSuppressResponseMsg)
 {
 	ECommandResult::Type Result = ECommandResult::Failed;
 
@@ -693,6 +706,10 @@ ECommandResult::Type FFriendshipperSourceControlProvider::ExecuteSynchronousComm
 			InControlCommand->Cancel();
 		}
 	};
+
+	const bool bIsRunningCommandlet = IsRunningCommandlet();
+	const bool bIsUnattended = FApp::IsUnattended();
+	const bool bSuppressResponseMsg = bInSuppressResponseMsg || bIsRunningCommandlet || bIsUnattended;
 
 	FText TaskText = Task;
 	// Display the progress dialog

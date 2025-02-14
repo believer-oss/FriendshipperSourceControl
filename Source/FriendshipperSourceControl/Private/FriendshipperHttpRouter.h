@@ -37,4 +37,8 @@ struct FFriendshipperHttpRouter
 	FOnStatusUpdate OnStatusUpdateRecieved;
 
 	TArray<FHttpRouteHandle> Routes;
+
+	FGenericPlatformProcess::FSemaphore* InterprocessRouterGuard = nullptr;
+	TUniquePtr<FRunnable> HttpTickerHackRunnable;
+	TUniquePtr<FRunnableThread> HttpTickerHackThread;
 };

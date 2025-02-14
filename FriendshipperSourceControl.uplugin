@@ -20,7 +20,7 @@
 		},
 		{
 			"Name": "FriendshipperSourceControl",
-			"Type": "EditorNoCommandlet",
+			"Type": "Editor",
 			"LoadingPhase": "Default"
 		},
 	],

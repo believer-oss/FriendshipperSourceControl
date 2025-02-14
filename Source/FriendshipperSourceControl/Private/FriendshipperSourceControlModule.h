@@ -15,8 +15,6 @@
 struct FAssetData;
 class FExtender;
 
-extern const FName kOtelTracer;
-
 class FFriendshipperSourceControlModule : public IModuleInterface
 {
 public:
